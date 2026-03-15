@@ -337,7 +337,7 @@ def _(index, model, retrieve):
     query_embeddings = model.encode([colbert_query], is_query=True)
     results = retriever_1.retrieve(queries_embeddings=query_embeddings, k=3)
     results
-    return colbert_query, results
+    return (results,)
 
 
 @app.cell
