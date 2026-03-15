@@ -315,7 +315,7 @@ def _():
 @app.cell
 def _():
     docs = YoutubeLoader.from_youtube_url(
-        "https://www.youtube.com/watch?v=pbAd8O1Lvm4", add_video_info=True
+        "https://www.youtube.com/watch?v=pbAd8O1Lvm4", add_video_info=False
     ).load()
 
     docs[0].metadata

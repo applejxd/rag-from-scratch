@@ -60,7 +60,7 @@ def _():
     mo.md(r"""
     # Rag From Scratch: Retrieval
 
-    ![Screenshot 2024-03-25 at 8.23.58 PM.png](attachment:c6ee3569-ca87-49b5-8f2c-21193230f8d4.png)
+    ![Screenshot 2024-03-25 at 8.23.58 PM.png](./imgs/retrieval_overview.png)
     """)
     return
 
@@ -97,19 +97,6 @@ def _():
         os.environ["LANGSMITH_TRACING"] = "true"
         os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
         os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
-    return
-
-
-@app.cell(hide_code=True)
-def _():
-    mo.md(r"""
-    `(3) API Keys`
-    """)
-    return
-
-
-@app.cell
-def _():
     return
 
 
@@ -242,6 +229,11 @@ def _(CohereRerank, ContextualCompressionRetriever, question, vectorstore):
     compression_retriever = ContextualCompressionRetriever(base_compressor=compressor, base_retriever=retriever_1)
     # Re-rank
     compressed_docs = compression_retriever.invoke(question)
+    return
+
+
+@app.cell
+def _():
     return
 
 

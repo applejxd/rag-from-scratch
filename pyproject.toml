@@ -1,10 +1,11 @@
 [project]
 name = "rag-from-scratch"
 version = "0.1.0"
-requires-python = ">=3.13"
+requires-python = "==3.12.*"
 dependencies = [
     "bs4>=0.0.2",
     "chromadb>=1.5.5",
+    "ipython>=9.6.0",
     "langchain>=1.2.12",
     "langchain-chroma>=1.1.0",
     "langchain-community>=0.4.1",
@@ -14,5 +15,8 @@ dependencies = [
     "langsmith>=0.7.17",
     "marimo[recommended]>=0.20.4",
     "numpy>=2.4.3",
+    "pylate>=1.4.0",
+    "pytube>=15.0.0",
     "tiktoken>=0.12.0",
+    "youtube-transcript-api>=1.2.4",
 ]

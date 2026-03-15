@@ -1,5 +1,5 @@
 # /// script
-# dependencies = ["chromadb", "langchain", "langchain-chroma", "langchain-community", "langchain-openai", "langchain-text-splitters", "langsmith", "pytube", "ragatouille", "requests", "tiktoken", "youtube-transcript-api"]
+# dependencies = ["chromadb", "ipython", "langchain", "langchain-chroma", "langchain-community", "langchain-openai", "langchain-text-splitters", "langsmith", "pylate", "pytube", "requests", "tiktoken", "youtube-transcript-api"]
 # ///
 
 import marimo
@@ -13,8 +13,6 @@ with app.setup:
 
     import marimo as mo
 
-    from langchain_core.stores import InMemoryByteStore
-    from langchain_classic.retrievers.multi_vector import MultiVectorRetriever
     from langchain_chroma import Chroma
     from langchain_core.documents import Document
     from langchain_core.output_parsers import StrOutputParser
@@ -148,6 +146,9 @@ def _(docs):
 
 @app.cell
 def _(docs, summaries):
+    from langchain_core.stores import InMemoryByteStore
+    from langchain_classic.retrievers.multi_vector import MultiVectorRetriever
+
     # The vectorstore to use to index the child chunks
     vectorstore = Chroma(collection_name="summaries",
                          embedding_function=make_embeddings())
@@ -178,15 +179,15 @@ def _(docs, summaries):
 
 @app.cell
 def _(vectorstore):
-    query = "Memory in agents"
-    sub_docs = vectorstore.similarity_search(query,k=1)
+    summary_query = "Memory in agents"
+    sub_docs = vectorstore.similarity_search(summary_query, k=1)
     sub_docs[0]
-    return (query,)
+    return (summary_query,)
 
 
 @app.cell
-def _(query, retriever):
-    retrieved_docs = retriever.invoke(query)
+def _(retriever, summary_query):
+    retrieved_docs = retriever.invoke(summary_query)
     retrieved_docs[0].page_content[0:500]
     return
 
@@ -228,7 +229,7 @@ def _():
     mo.md(r"""
     ## Part 14: ColBERT
 
-    RAGatouille makes it as simple to use ColBERT.
+    PyLate provides a ColBERT-oriented retrieval stack.
 
     ColBERT generates a contextually influenced vector for each token in the passages.
 
@@ -236,22 +237,23 @@ def _():
 
     Then, the score of each document is the sum of the maximum similarity of each query embedding to any of the document embeddings:
 
-    See [here](https://hackernoon.com/how-colbert-helps-developers-overcome-the-limits-of-rag) and [here](https://python.langchain.com/docs/integrations/retrievers/ragatouille) and [here](https://til.simonwillison.net/llms/colbert-ragatouille).
+    In this section, we will use PyLate's `ColBERT`, `PLAID`, and retrieval APIs directly.
     """)
     return
 
 
 @app.cell
 def _():
-    # packages added via marimo's package management: ragatouille !pip install -U ragatouille
+    # packages added via marimo's package management: pylate !pip install -U pylate
     return
 
 
 @app.cell
 def _():
-    from ragatouille import RAGPretrainedModel
-    RAG = RAGPretrainedModel.from_pretrained("colbert-ir/colbertv2.0")
-    return (RAG,)
+    from pylate import indexes, models, retrieve
+
+    model_name = os.environ.get("PYLATE_MODEL", "lightonai/GTE-ModernColBERT-v1")
+    return indexes, model_name, models, retrieve
 
 
 @app.cell
@@ -278,7 +280,7 @@ def _():
         }
 
         # Custom User-Agent header to comply with Wikipedia's best practices
-        headers = {"User-Agent": "RAGatouille_tutorial/0.0.1 (ben@clavie.eu)"}
+        headers = {"User-Agent": "PyLate_tutorial/0.0.1"}
 
         response = requests.get(URL, params=params, headers=headers)
         data = response.json()
@@ -292,27 +294,63 @@ def _():
 
 
 @app.cell
-def _(RAG, full_document):
-    RAG.index(
-        collection=[full_document],
-        index_name="Miyazaki-123",
-        max_document_length=180,
-        split_documents=True,
+def _(full_document):
+    def chunk_text(text: str, chunk_size: int = 900, overlap: int = 150):
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = min(start + chunk_size, len(text))
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+            if end >= len(text):
+                break
+            start = max(end - overlap, start + 1)
+        return chunks
+
+    documents = chunk_text(full_document)
+    document_ids = [f"miyazaki-{i}" for i in range(len(documents))]
+    documents_by_id = dict(zip(document_ids, documents))
+    return document_ids, documents, documents_by_id
+
+
+@app.cell
+def _(document_ids, documents, indexes, model_name, models):
+    model = models.ColBERT(model_name_or_path=model_name)
+    document_embeddings = model.encode(documents, is_query=False)
+    index = indexes.PLAID(
+        index_folder=".pylate-indexes",
+        index_name="miyazaki-colbert",
+        override=True,
     )
-    return
+    index.add_documents(
+        documents_ids=document_ids,
+        documents_embeddings=document_embeddings,
+    )
+    return index, model
 
 
 @app.cell
-def _(RAG):
-    results = RAG.search(query="What animation studio did Miyazaki found?", k=3)
+def _(index, model, retrieve):
+    retriever_1 = retrieve.ColBERT(index=index)
+    colbert_query = "What animation studio did Miyazaki found?"
+    query_embeddings = model.encode([colbert_query], is_query=True)
+    results = retriever_1.retrieve(queries_embeddings=query_embeddings, k=3)
     results
-    return
+    return colbert_query, results
 
 
 @app.cell
-def _(RAG):
-    retriever_1 = RAG.as_langchain_retriever(k=3)
-    retriever_1.invoke('What animation studio did Miyazaki found?')
+def _(documents_by_id, results):
+    retrieved_chunks = [
+        {
+            "id": result["id"],
+            "score": result["score"],
+            "text": documents_by_id[result["id"]],
+        }
+        for result in results[0]
+    ]
+    retrieved_chunks
     return
 
 
