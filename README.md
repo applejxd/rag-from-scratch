@@ -1,3 +1,7 @@
+`uv` dependency resolved `marimo` notebooks from [RAG from scratch](https://github.com/langchain-ai/rag-from-scratch)
+
+---
+
 # RAG From Scratch
 
 LLMs are trained on a large but fixed corpus of data, limiting their ability to reason about private or recent information. Fine-tuning is one way to mitigate this, but is often [not well-suited for factual recall](https://www.anyscale.com/blog/fine-tuning-is-for-form-not-facts) and [can be costly](https://www.glean.com/blog/how-to-build-an-ai-assistant-for-the-enterprise).
