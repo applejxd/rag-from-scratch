@@ -7,4 +7,5 @@ _.file = '.env'
 
 # see https://openrouter.ai/openai/gpt-5-nano
 MODEL = "openai/gpt-5-nano"
+# see https://openrouter.ai/openai/text-embedding-3-small
 EMBEDDING_MODEL = "openai/text-embedding-3-small"
