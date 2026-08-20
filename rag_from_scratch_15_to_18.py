@@ -1,7 +1,3 @@
-# /// script
-# dependencies = ["chromadb", "cohere", "langchain", "langchain-chroma", "langchain-classic", "langchain-community", "langchain-openai", "langchain-text-splitters", "langsmith", "tiktoken"]
-# ///
-
 import marimo
 
 __generated_with = "0.20.4"
@@ -9,15 +5,16 @@ app = marimo.App()
 
 with app.setup:
     import os
+
     import bs4
-
+    import cohere
     import marimo as mo
-
     from langchain_chroma import Chroma
+    from langchain_community.document_loaders import WebBaseLoader
+    from langchain_core.documents import Document
     from langchain_core.load import dumps, loads
     from langchain_core.output_parsers import StrOutputParser
     from langchain_core.prompts import ChatPromptTemplate
-    from langchain_community.document_loaders import WebBaseLoader
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -54,6 +51,36 @@ with app.setup:
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
+    def rerank_with_cohere(question: str, docs, top_n: int = 3):
+        if not docs:
+            return []
+
+        api_key = os.environ.get("COHERE_API_KEY")
+        if not api_key:
+            raise ValueError("COHERE_API_KEY is required for Cohere reranking.")
+
+        client = cohere.ClientV2(api_key=api_key)
+        response = client.rerank(
+            model=os.environ.get("COHERE_RERANK_MODEL", "rerank-v4.0-fast"),
+            query=question,
+            documents=[doc.page_content for doc in docs],
+            top_n=min(top_n, len(docs)),
+        )
+
+        reranked_docs = []
+        for result in response.results:
+            source_doc = docs[result.index]
+            reranked_docs.append(
+                Document(
+                    page_content=source_doc.page_content,
+                    metadata={
+                        **source_doc.metadata,
+                        "relevance_score": result.relevance_score,
+                    },
+                )
+            )
+        return reranked_docs
+
 
 @app.cell(hide_code=True)
 def _():
@@ -62,41 +89,6 @@ def _():
 
     ![Screenshot 2024-03-25 at 8.23.58 PM.png](./imgs/retrieval_overview.png)
     """)
-    return
-
-
-@app.cell(hide_code=True)
-def _():
-    mo.md(r"""
-    ## Environment
-
-    `(1) Packages`
-    """)
-    return
-
-
-@app.cell
-def _():
-    # packages added via marimo's package management: langchain_community tiktoken langchain-openai langchain-chroma langchain-classic langchain-text-splitters langsmith chromadb langchain cohere !pip install langchain_community tiktoken langchain-openai langchain-chroma langchain-classic langchain-text-splitters langsmith chromadb langchain cohere
-    return
-
-
-@app.cell(hide_code=True)
-def _():
-    mo.md(r"""
-    `(2) LangSmith`
-
-    https://docs.smith.langchain.com/
-    """)
-    return
-
-
-@app.cell
-def _():
-    if os.environ.get("LANGCHAIN_API_KEY"):
-        os.environ["LANGSMITH_TRACING"] = "true"
-        os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
-        os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
     return
 
 
@@ -119,11 +111,11 @@ def _():
     # Load blog
     loader = WebBaseLoader(
         web_paths=("https://lilianweng.github.io/posts/2023-06-23-agent/",),
-        bs_kwargs=dict(
-            parse_only=bs4.SoupStrainer(
+        bs_kwargs={
+            "parse_only": bs4.SoupStrainer(
                 class_=("post-content", "post-title", "post-header")
             )
-        ),
+        },
     )
     blog_docs = loader.load()
 
@@ -179,7 +171,6 @@ def _(generate_queries, retriever):
                 doc_str = dumps(doc)
                 if doc_str not in fused_scores:  # Iterate through each list of ranked documents
                     fused_scores[doc_str] = 0
-                previous_score = fused_scores[doc_str]  # Iterate through each document in the list, with its rank (position in the list)
                 fused_scores[doc_str] = fused_scores[doc_str] + 1 / (rank + k)
         reranked_results = [(loads(doc), score) for doc, score in sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)]  # Convert the document to a string format to use as a key (assumes documents can be serialized to JSON)
         return reranked_results
@@ -215,25 +206,11 @@ def _():
 
 
 @app.cell
-def _():
-    from langchain_classic.retrievers import ContextualCompressionRetriever
-    from langchain_classic.retrievers.document_compressors import CohereRerank
-
-    return CohereRerank, ContextualCompressionRetriever
-
-
-@app.cell
-def _(CohereRerank, ContextualCompressionRetriever, question, vectorstore):
+def _(question, vectorstore):
     retriever_1 = vectorstore.as_retriever(search_kwargs={'k': 10})
-    compressor = CohereRerank()
-    compression_retriever = ContextualCompressionRetriever(base_compressor=compressor, base_retriever=retriever_1)
-    # Re-rank
-    compressed_docs = compression_retriever.invoke(question)
-    return
-
-
-@app.cell
-def _():
+    retrieved_docs = retriever_1.invoke(question)
+    compressed_docs = rerank_with_cohere(question, retrieved_docs, top_n=3)
+    compressed_docs
     return
 
 

@@ -1,15 +1,3 @@
-# /// script
-# dependencies = [
-#     "chromadb",
-#     "langchain",
-#     "langchain-community",
-#     "langchain-openai",
-#     "marimo>=0.20.2",
-#     "pyzmq>=27.1.0",
-#     "tiktoken",
-# ]
-# ///
-
 import marimo
 
 __generated_with = "0.20.4"
@@ -17,22 +5,18 @@ app = marimo.App()
 
 with app.setup:
     # Initialization code that runs before all other cells
-    import marimo as mo
     import os
+
     import bs4
-
-    from langsmith import Client
-
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-    from langchain_community.document_loaders import WebBaseLoader
-    from langchain_chroma import Chroma
-    from langchain_core.output_parsers import StrOutputParser
-    from langchain_core.runnables import RunnablePassthrough
-    from langchain_core.prompts import ChatPromptTemplate
-    from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-
-    import tiktoken
     import numpy as np
+    import tiktoken
+    from langchain_chroma import Chroma
+    from langchain_community.document_loaders import WebBaseLoader
+    from langchain_core.output_parsers import StrOutputParser
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.runnables import RunnablePassthrough
+    from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
     DEFAULT_CHAT_MODEL = os.environ.get("MODEL", "openai/gpt-5-nano")
@@ -67,9 +51,6 @@ with app.setup:
         return "\n\n".join(doc.page_content for doc in docs)
 
     def load_rag_prompt():
-        if os.environ.get("LANGCHAIN_API_KEY"):
-            return Client().pull_prompt("rlm/rag-prompt")
-
         template = (
             "Answer the question based only on the following context:\n"
             "{context}\n\nQuestion: {question}\n"
@@ -78,7 +59,7 @@ with app.setup:
 
 
 @app.cell(hide_code=True)
-def _():
+def _(mo):
     mo.md(r"""
     # Rag From Scratch: Overview
 
@@ -87,41 +68,12 @@ def _():
     They will build towards a broader understanding of the RAG langscape, as shown here:
 
     ![Screenshot 2024-03-25 at 8.30.33 PM.png](./imgs/overview.png)
-
-    ## Environment
-
-    `(1) Packages`
     """)
     return
 
 
-@app.cell
-def _():
-    # packages added via marimo's package management: langchain_community tiktoken langchain-openai chromadb langchain !pip install langchain_community tiktoken langchain-openai chromadb langchain
-    return
-
-
 @app.cell(hide_code=True)
-def _():
-    mo.md(r"""
-    `(2) LangSmith`
-
-    https://docs.smith.langchain.com/
-    """)
-    return
-
-
-@app.cell
-def _():
-    if os.environ.get("LANGCHAIN_API_KEY"):
-        os.environ["LANGSMITH_TRACING"] = "true"
-        os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
-        os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
-    return
-
-
-@app.cell(hide_code=True)
-def _():
+def _(mo):
     mo.md(r"""
     ## Part 1: Overview
 
@@ -136,11 +88,11 @@ def _():
     # Load Documents
     loader = WebBaseLoader(
         web_paths=("https://lilianweng.github.io/posts/2023-06-23-agent/",),
-        bs_kwargs=dict(
-            parse_only=bs4.SoupStrainer(
+        bs_kwargs={
+            "parse_only": bs4.SoupStrainer(
                 class_=("post-content", "post-title", "post-header")
             )
-        ),
+        },
     )
     docs = loader.load()
 
@@ -175,7 +127,7 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _():
+def _(mo):
     mo.md(r"""
     ## Part 2: Indexing
 
@@ -193,7 +145,7 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _():
+def _(mo):
     mo.md(r"""
     [Count tokens](https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb) considering [~4 char / token](https://help.openai.com/en/articles/4936856-what-are-tokens-and-how-to-count-them)
     """)
@@ -213,7 +165,7 @@ def _(question):
 
 
 @app.cell(hide_code=True)
-def _():
+def _(mo):
     mo.md(r"""
     [Text embedding models](https://python.langchain.com/docs/integrations/text_embedding/openai)
     """)
@@ -231,7 +183,7 @@ def _(document, question):
 
 
 @app.cell(hide_code=True)
-def _():
+def _(mo):
     mo.md(r"""
     [Cosine similarity](https://platform.openai.com/docs/guides/embeddings/frequently-asked-questions) is recommended (1 indicates identical) for OpenAI embeddings.
     """)
@@ -252,7 +204,7 @@ def _(document_result, query_result):
 
 
 @app.cell(hide_code=True)
-def _():
+def _(mo):
     mo.md(r"""
     [Document Loaders](https://python.langchain.com/docs/integrations/document_loaders/)
     """)
@@ -264,11 +216,11 @@ def _():
     #### INDEXING ####
     loader_1 = WebBaseLoader(
         web_paths=("https://lilianweng.github.io/posts/2023-06-23-agent/",),
-        bs_kwargs=dict(
-            parse_only=bs4.SoupStrainer(
+        bs_kwargs={
+            "parse_only": bs4.SoupStrainer(
                 class_=("post-content", "post-title", "post-header")
             )
-        ),
+        },
     )
     # Load blog
     blog_docs = loader_1.load()
@@ -276,7 +228,7 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _():
+def _(mo):
     mo.md(r"""
     [Splitter](https://python.langchain.com/docs/modules/data_connection/document_transformers/recursive_text_splitter)
 
@@ -297,7 +249,7 @@ def _(blog_docs):
 
 
 @app.cell(hide_code=True)
-def _():
+def _(mo):
     mo.md(r"""
     [Vectorstores](https://python.langchain.com/docs/integrations/vectorstores/)
     """)
@@ -311,11 +263,11 @@ def _(splits_1):
         documents=splits_1, embedding=make_embeddings()
     )
     retriever_1 = vectorstore_1.as_retriever()
-    return
+    return (retriever_1,)
 
 
 @app.cell(hide_code=True)
-def _():
+def _(mo):
     mo.md(r"""
     ## Part 3: Retrieval
     """)
@@ -345,7 +297,7 @@ def _(docs_1):
 
 
 @app.cell(hide_code=True)
-def _():
+def _(mo):
     mo.md(r"""
     ## Part 4: Generation
 
@@ -399,7 +351,7 @@ def _(prompt_hub_rag):
 
 
 @app.cell(hide_code=True)
-def _():
+def _(mo):
     mo.md(r"""
     [RAG chains](https://python.langchain.com/docs/expression_language/get_started#rag-search-example)
     """)

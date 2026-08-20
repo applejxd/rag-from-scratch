@@ -1,7 +1,3 @@
-# /// script
-# dependencies = ["langchain", "langchain-community", "langchain-openai", "langsmith", "numpy", "pytube", "tiktoken", "youtube-transcript-api"]
-# ///
-
 import marimo
 
 __generated_with = "0.20.4"
@@ -10,17 +6,16 @@ app = marimo.App()
 with app.setup:
     import datetime
     import os
-    from typing import Literal, Optional
+    from typing import Literal
 
     import marimo as mo
     import numpy as np
-    from pydantic import BaseModel, Field
-
     from langchain_community.document_loaders import YoutubeLoader
     from langchain_core.output_parsers import StrOutputParser
     from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
     from langchain_core.runnables import RunnableLambda, RunnablePassthrough
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+    from pydantic import BaseModel, Field
 
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
     DEFAULT_CHAT_MODEL = os.environ.get("MODEL", "openai/gpt-5-nano")
@@ -61,36 +56,7 @@ def _():
     # Rag From Scratch: Routing
 
     ![image.png](./imgs/routing_overview.png)
-
-    ## Environment
-
-    `(1) Packages`
     """)
-    return
-
-
-@app.cell
-def _():
-    # packages added via marimo's package management: langchain_community tiktoken langchain-openai langsmith numpy langchain youtube-transcript-api pytube !pip install langchain_community tiktoken langchain-openai langsmith numpy langchain youtube-transcript-api pytube
-    return
-
-
-@app.cell(hide_code=True)
-def _():
-    mo.md(r"""
-    `(2) LangSmith`
-
-    https://docs.smith.langchain.com/
-    """)
-    return
-
-
-@app.cell
-def _():
-    if os.environ.get("LANGCHAIN_API_KEY"):
-        os.environ["LANGSMITH_TRACING"] = "true"
-        os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
-        os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
     return
 
 
@@ -342,12 +308,12 @@ class TutorialSearch(BaseModel):
     """Search over a database of tutorial videos about a software library."""
     content_search: str = Field(..., description='Similarity search query applied to video transcripts.')
     title_search: str = Field(..., description='Alternate version of the content search query to apply to video titles. Should be succinct and only include key words that could be in a video title.')
-    min_view_count: Optional[int] = Field(None, description='Minimum view count filter, inclusive. Only use if explicitly specified.')
-    max_view_count: Optional[int] = Field(None, description='Maximum view count filter, exclusive. Only use if explicitly specified.')
-    earliest_publish_date: Optional[datetime.date] = Field(None, description='Earliest publish date filter, inclusive. Only use if explicitly specified.')
-    latest_publish_date: Optional[datetime.date] = Field(None, description='Latest publish date filter, exclusive. Only use if explicitly specified.')
-    min_length_sec: Optional[int] = Field(None, description='Minimum video length in seconds, inclusive. Only use if explicitly specified.')
-    max_length_sec: Optional[int] = Field(None, description='Maximum video length in seconds, exclusive. Only use if explicitly specified.')
+    min_view_count: int | None = Field(None, description='Minimum view count filter, inclusive. Only use if explicitly specified.')
+    max_view_count: int | None = Field(None, description='Maximum view count filter, exclusive. Only use if explicitly specified.')
+    earliest_publish_date: datetime.date | None = Field(None, description='Earliest publish date filter, inclusive. Only use if explicitly specified.')
+    latest_publish_date: datetime.date | None = Field(None, description='Latest publish date filter, exclusive. Only use if explicitly specified.')
+    min_length_sec: int | None = Field(None, description='Minimum video length in seconds, inclusive. Only use if explicitly specified.')
+    max_length_sec: int | None = Field(None, description='Maximum video length in seconds, exclusive. Only use if explicitly specified.')
 
     def pretty_print(self) -> None:
         for field_name, field_info in type(self).model_fields.items():

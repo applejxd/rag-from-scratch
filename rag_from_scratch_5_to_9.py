@@ -1,22 +1,15 @@
-# /// script
-# dependencies = ["chromadb", "langchain", "langchain-chroma", "langchain-community", "langchain-openai", "langchain-text-splitters", "langsmith", "tiktoken"]
-# ///
-
 import marimo
 
 __generated_with = "0.20.4"
 app = marimo.App()
 
 with app.setup:
-    import marimo as mo
     import os
+
     import bs4
-
-    from langsmith import Client
-
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-    from langchain_community.document_loaders import WebBaseLoader
+    import marimo as mo
     from langchain_chroma import Chroma
+    from langchain_community.document_loaders import WebBaseLoader
     from langchain_core.load import dumps, loads
     from langchain_core.output_parsers import StrOutputParser
     from langchain_core.prompts import (
@@ -25,6 +18,7 @@ with app.setup:
     )
     from langchain_core.runnables import RunnableLambda
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
     DEFAULT_CHAT_MODEL = os.environ.get("MODEL", "openai/gpt-5-nano")
@@ -59,9 +53,6 @@ with app.setup:
         return "\n\n".join(doc.page_content for doc in docs)
 
     def load_rag_prompt():
-        if os.environ.get("LANGCHAIN_API_KEY"):
-            return Client().pull_prompt("rlm/rag-prompt")
-
         template = (
             "Answer the question based only on the following context:\n"
             "{context}\n\nQuestion: {question}\n"
@@ -77,36 +68,7 @@ def _():
     Query transformations are a set of approaches focused on re-writing and / or modifying questions for retrieval.
 
     ![Screenshot 2024-03-25 at 8.08.30 PM.png](./imgs/query_overview.png)
-
-    ## Environment
-
-    `(1) Packages`
     """)
-    return
-
-
-@app.cell
-def _():
-    # packages added via marimo's package management: langchain_community tiktoken langchain-openai chromadb langchain langchain-chroma langchain-text-splitters langsmith !pip install langchain_community tiktoken langchain-openai chromadb langchain langchain-chroma langchain-text-splitters langsmith
-    return
-
-
-@app.cell(hide_code=True)
-def _():
-    mo.md(r"""
-    `(2) LangSmith`
-
-    https://docs.smith.langchain.com/
-    """)
-    return
-
-
-@app.cell
-def _():
-    if os.environ.get("LANGCHAIN_API_KEY"):
-        os.environ["LANGSMITH_TRACING"] = "true"
-        os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
-        os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
     return
 
 
@@ -135,11 +97,11 @@ def _():
     # Load blog
     loader = WebBaseLoader(
         web_paths=("https://lilianweng.github.io/posts/2023-06-23-agent/",),
-        bs_kwargs=dict(
-            parse_only=bs4.SoupStrainer(
+        bs_kwargs={
+            "parse_only": bs4.SoupStrainer(
                 class_=("post-content", "post-title", "post-header")
             )
-        ),
+        },
     )
     blog_docs = loader.load()
 
@@ -263,7 +225,6 @@ def _(generate_queries_1, question, retriever):
                 doc_str = dumps(doc)  # Initialize a dictionary to hold fused scores for each unique document
                 if doc_str not in fused_scores:
                     fused_scores[doc_str] = 0
-                previous_score = fused_scores[doc_str]  # Iterate through each list of ranked documents
                 fused_scores[doc_str] = fused_scores[doc_str] + 1 / (rank + k)
         reranked_results = [(loads(doc), score) for doc, score in sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)]  # Iterate through each document in the list, with its rank (position in the list)
         return reranked_results

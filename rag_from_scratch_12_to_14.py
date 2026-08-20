@@ -1,7 +1,3 @@
-# /// script
-# dependencies = ["chromadb", "ipython", "langchain", "langchain-chroma", "langchain-community", "langchain-openai", "langchain-text-splitters", "langsmith", "pylate", "pytube", "requests", "tiktoken", "youtube-transcript-api"]
-# ///
-
 import marimo
 
 __generated_with = "0.20.4"
@@ -12,14 +8,12 @@ with app.setup:
     import uuid
 
     import marimo as mo
-
     from langchain_chroma import Chroma
+    from langchain_community.document_loaders import WebBaseLoader
     from langchain_core.documents import Document
     from langchain_core.output_parsers import StrOutputParser
     from langchain_core.prompts import ChatPromptTemplate
-    from langchain_community.document_loaders import WebBaseLoader
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
     DEFAULT_CHAT_MODEL = os.environ.get("MODEL", "openai/gpt-5-nano")
@@ -51,6 +45,30 @@ with app.setup:
             tiktoken_enabled=False,
         )
 
+    class SimpleMultiVectorRetriever:
+        def __init__(self, vectorstore, id_key: str):
+            self.vectorstore = vectorstore
+            self.id_key = id_key
+            self._docstore = {}
+
+        def set_parent_documents(self, docs_by_id):
+            self._docstore = dict(docs_by_id)
+
+        def invoke(self, query: str, k: int = 4):
+            child_docs = self.vectorstore.similarity_search(query, k=k)
+            parent_docs = []
+            seen_ids = set()
+            for child_doc in child_docs:
+                doc_id = child_doc.metadata.get(self.id_key)
+                if doc_id in seen_ids:
+                    continue
+                parent_doc = self._docstore.get(doc_id)
+                if parent_doc is None:
+                    continue
+                seen_ids.add(doc_id)
+                parent_docs.append(parent_doc)
+            return parent_docs
+
 
 @app.cell(hide_code=True)
 def _():
@@ -66,36 +84,7 @@ def _():
     For an excellent review of document chunking, see this video from Greg Kamradt:
 
     https://www.youtube.com/watch?v=8OJC21T2SL4
-
-    ## Environment
-
-    `(1) Packages`
     """)
-    return
-
-
-@app.cell
-def _():
-    # packages added via marimo's package management: langchain_community tiktoken langchain-openai langchain-chroma langchain-text-splitters langsmith chromadb langchain youtube-transcript-api pytube requests !pip install langchain_community tiktoken langchain-openai langchain-chroma langchain-text-splitters langsmith chromadb langchain youtube-transcript-api pytube requests
-    return
-
-
-@app.cell(hide_code=True)
-def _():
-    mo.md(r"""
-    `(2) LangSmith`
-
-    https://docs.smith.langchain.com/
-    """)
-    return
-
-
-@app.cell
-def _():
-    if os.environ.get("LANGCHAIN_API_KEY"):
-        os.environ["LANGSMITH_TRACING"] = "true"
-        os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
-        os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
     return
 
 
@@ -146,23 +135,13 @@ def _(docs):
 
 @app.cell
 def _(docs, summaries):
-    from langchain_core.stores import InMemoryByteStore
-    from langchain_classic.retrievers.multi_vector import MultiVectorRetriever
-
     # The vectorstore to use to index the child chunks
     vectorstore = Chroma(collection_name="summaries",
                          embedding_function=make_embeddings())
 
-    # The storage layer for the parent documents
-    store = InMemoryByteStore()
     id_key = "doc_id"
 
-    # The retriever
-    retriever = MultiVectorRetriever(
-        vectorstore=vectorstore,
-        byte_store=store,
-        id_key=id_key,
-    )
+    retriever = SimpleMultiVectorRetriever(vectorstore=vectorstore, id_key=id_key)
     doc_ids = [str(uuid.uuid4()) for _ in docs]
 
     # Docs linked to summaries
@@ -172,8 +151,8 @@ def _(docs, summaries):
     ]
 
     # Add
-    retriever.vectorstore.add_documents(summary_docs)
-    retriever.docstore.mset(list(zip(doc_ids, docs)))
+    vectorstore.add_documents(summary_docs)
+    retriever.set_parent_documents(zip(doc_ids, docs))
     return retriever, vectorstore
 
 
@@ -244,12 +223,6 @@ def _():
 
 @app.cell
 def _():
-    # packages added via marimo's package management: pylate !pip install -U pylate
-    return
-
-
-@app.cell
-def _():
     from pylate import indexes, models, retrieve
 
     model_name = os.environ.get("PYLATE_MODEL", "lightonai/GTE-ModernColBERT-v1")
@@ -287,7 +260,7 @@ def _():
 
         # Extracting page content
         page = next(iter(data["query"]["pages"].values()))
-        return page["extract"] if "extract" in page else None
+        return page.get("extract")
 
     full_document = get_wikipedia_page("Hayao_Miyazaki")
     return (full_document,)
