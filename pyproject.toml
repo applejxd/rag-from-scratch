@@ -5,7 +5,11 @@ requires-python = "==3.12.*"
 dependencies = [
     "bs4>=0.0.2",
     "chromadb>=1.5.5",
-    "cohere>=5.20.0",
+    # ipython: not imported directly, but required so that `sentence-transformers`
+    # (via `transformers`) can import cleanly under marimo. `transformers`
+    # detects marimo as a notebook environment and unconditionally imports
+    # `IPython.display` at that point. See rag_from_scratch_15_to_18.py.
+    "ipython>=9.16.1",
     "langchain>=1.2.12",
     "langchain-chroma>=1.1.0",
     "langchain-community>=0.4.1",

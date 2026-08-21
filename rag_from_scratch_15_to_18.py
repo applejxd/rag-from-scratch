@@ -8,8 +8,8 @@ with app.setup:
     from operator import itemgetter
 
     import bs4
-    import cohere
     import marimo as mo
+    import torch
     from langchain_chroma import Chroma
     from langchain_community.document_loaders import WebBaseLoader
     from langchain_core.documents import Document
@@ -18,6 +18,7 @@ with app.setup:
     from langchain_core.prompts import ChatPromptTemplate
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
     from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from sentence_transformers import CrossEncoder
 
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
     DEFAULT_CHAT_MODEL = os.environ.get("MODEL", "openai/gpt-5-nano")
@@ -52,31 +53,31 @@ with app.setup:
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
-    def rerank_with_cohere(question: str, docs, top_n: int = 3):
+    def rerank_with_cross_encoder(question: str, docs, top_n: int = 3):
         if not docs:
             return []
 
-        api_key = os.environ.get("COHERE_API_KEY")
-        if not api_key:
-            raise ValueError("COHERE_API_KEY is required for Cohere reranking.")
+        model_name = os.environ.get(
+            "RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
+        )
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        cross_encoder = CrossEncoder(model_name, device=device)
 
-        client = cohere.ClientV2(api_key=api_key)
-        response = client.rerank(
-            model=os.environ.get("COHERE_RERANK_MODEL", "rerank-v4.0-fast"),
-            query=question,
-            documents=[doc.page_content for doc in docs],
-            top_n=min(top_n, len(docs)),
+        pairs = [(question, doc.page_content) for doc in docs]
+        scores = cross_encoder.predict(pairs)
+
+        ranked_docs = sorted(
+            zip(docs, scores), key=lambda item: item[1], reverse=True
         )
 
         reranked_docs = []
-        for result in response.results:
-            source_doc = docs[result.index]
+        for source_doc, score in ranked_docs[:top_n]:
             reranked_docs.append(
                 Document(
                     page_content=source_doc.page_content,
                     metadata={
                         **source_doc.metadata,
-                        "relevance_score": result.relevance_score,
+                        "relevance_score": float(score),
                     },
                 )
             )
@@ -210,13 +211,11 @@ def _(rag_fusion_retrieval_chain, reranking_question):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    [Cohere Re-Rank](https://python.langchain.com/docs/integrations/retrievers/cohere-reranker#doing-reranking-with-coherererank)も利用できます。
+    再ランキングは、Cohereなどのマネージド型Rerank APIを使う方法もあります（[Cohere Re-Rank](https://python.langchain.com/docs/integrations/retrievers/cohere-reranker#doing-reranking-with-coherererank)、[解説記事](https://txt.cohere.com/rerank/)）。
 
-    ここでは最初にベクトル検索で10件を取得し、Cohereで関連度を再計算して上位3件へ絞ります。実行には `COHERE_API_KEY` が必要で、関連度は各文書の `metadata["relevance_score"]` に保存されます。
+    ここでは外部APIキーを必要としない方式として、`sentence-transformers` の[CrossEncoder](https://www.sbert.net/docs/cross_encoder/pretrained_models.html)をローカルで実行します。まず最初にベクトル検索で10件を取得し、質問と各文書のペアをCrossEncoderへ直接入力して関連度スコアを計算し、上位3件へ絞ります。GPUが使える環境では自動的にGPU上で実行され、関連度は各文書の `metadata["relevance_score"]` に保存されます。
 
-    詳細は[こちら](https://txt.cohere.com/rerank/)を参照してください。
-
-    ![Cohere Re-Rankの流れ](./imgs/Cohere_Re-Rank.png)
+    ![再ランキングの流れ（候補取得→スコアリング→上位選択）](./imgs/Cohere_Re-Rank.png)
     """)
     return
 
@@ -225,7 +224,7 @@ def _():
 def _(reranking_question, vectorstore):
     candidate_retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
     candidate_documents = candidate_retriever.invoke(reranking_question)
-    reranked_documents = rerank_with_cohere(
+    reranked_documents = rerank_with_cross_encoder(
         reranking_question, candidate_documents, top_n=3
     )
     reranked_documents

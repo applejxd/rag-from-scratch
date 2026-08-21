@@ -36,9 +36,9 @@ mise exec -- uv sync --locked
 mise exec -- sops .env.json
 ```
 
-`OPENROUTER_API_KEY` が必須です。パート15では再ランキングのために
-`COHERE_API_KEY` も使用します。SOPSは復号した内容を一時的なエディタバッファで
-開き、保存時に再度暗号化します。
+`OPENROUTER_API_KEY` が必須です。パート15の再ランキングは `sentence-transformers`
+のCrossEncoderをローカルで実行するため、追加のAPIキーは不要です。SOPSは復号した
+内容を一時的なエディタバッファで開き、保存時に再度暗号化します。
 
 ## 実行方法
 
