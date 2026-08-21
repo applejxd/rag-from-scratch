@@ -18,23 +18,34 @@ retrieval, and generation.
 
 ## Setup
 
-Python 3.12 and `uv` are required.
+Python 3.12 and [mise](https://mise.jdx.dev/) are required. SOPS uses age to
+decrypt `.env.json`; place the private key corresponding to the recipient in
+`.sops.yaml` at `~/.config/sops/age/keys.txt`. Never commit the private key.
 
 ```shell
-cp .env.example .env
-uv sync --locked
+mise trust
+mise install
+mise exec -- uv sync --locked
 ```
 
-Set `OPENROUTER_API_KEY` in `.env`. Part 15 also uses `COHERE_API_KEY` for
-reranking. When using `mise`, the model defaults in `mise.toml` and variables
-from `.env` are loaded automatically.
+`mise` installs `uv` and SOPS, decrypts `.env.json`, and supplies its values as
+environment variables without creating a plaintext file. Edit the encrypted
+file with:
+
+```shell
+mise exec -- sops .env.json
+```
+
+`OPENROUTER_API_KEY` is required. Part 15 also uses `COHERE_API_KEY` for
+reranking. SOPS opens the decrypted content in a temporary editor buffer and
+encrypts it again when saving.
 
 ## Run
 
 Open a notebook in edit mode:
 
 ```shell
-uv run marimo edit rag_from_scratch_1_to_4.py
+mise exec -- uv run marimo edit rag_from_scratch_1_to_4.py
 ```
 
 The notebooks are split into the following files:
@@ -54,12 +65,12 @@ The original Jupyter notebooks are retained in `old/` as migration references.
 Install the Git hook after `uv sync`:
 
 ```shell
-uv run pre-commit install
+mise exec -- uv run pre-commit install
 ```
 
-The hook runs Ruff, `marimo check --strict`, and Gitleaks. Run all checks
-manually with:
+The hook verifies that `.env.json` is SOPS-encrypted and runs Ruff,
+`marimo check --strict`, and Gitleaks. Run all checks manually with:
 
 ```shell
-uv run pre-commit run --all-files
+mise exec -- uv run pre-commit run --all-files
 ```

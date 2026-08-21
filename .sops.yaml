@@ -1,0 +1,3 @@
+creation_rules:
+  - path_regex: ^\.env\.json$
+    age: age16mj99r8glrnazuen4mu7hmf9t2d8v7640rm3a4mfls3sd3kya56sfcrqw2

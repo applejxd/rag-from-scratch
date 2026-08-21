@@ -1,9 +1,9 @@
 [tools]
+sops = "latest"
 uv = "latest"
 
 [env]
-# set OPENROUTER_API_KEY
-_.file = '.env'
+_.file = { path = ".env.json", redact = true }
 
 # see https://openrouter.ai/openai/gpt-5-nano
 MODEL = "openai/gpt-5-nano"
