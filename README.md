@@ -4,23 +4,19 @@
 の Jupyter notebooks を、`uv` で依存関係を管理する
 [marimo](https://marimo.io/) notebooks に移行した学習用リポジトリです。
 
-LLMs are trained on a large but fixed corpus of data, limiting their ability to
-reason about private or recent information. Retrieval augmented generation
-(RAG) expands an LLM's knowledge base by grounding generation in retrieved
-documents.
+LLMは大規模ではあるものの固定されたコーパスで学習されているため、非公開情報や最新情報についての推論を苦手とします。Retrieval Augmented Generation（RAG）は、検索した文書に生成内容を根拠付けることで、LLMの知識ベースを拡張する手法です。
 
-These notebooks accompany a
-[video playlist](https://www.youtube.com/playlist?list=PLfaIDFEXuae2LXbO1_PKyVJiQ23ZztA0x)
-that builds up an understanding of RAG from scratch, starting with indexing,
-retrieval, and generation.
+これらのノートブックは、インデックス作成・検索・生成という基礎から段階的にRAGへの理解を深める
+[動画プレイリスト](https://www.youtube.com/playlist?list=PLfaIDFEXuae2LXbO1_PKyVJiQ23ZztA0x)
+に沿った教材です。
 
 ![rag_detail_v2](https://github.com/langchain-ai/rag-from-scratch/assets/122662504/54a2d76c-b07e-49e7-b4ce-fc45667360a1)
 
-## Setup
+## セットアップ
 
-Python 3.12 and [mise](https://mise.jdx.dev/) are required. SOPS uses age to
-decrypt `.env.json`; place the private key corresponding to the recipient in
-`.sops.yaml` at `~/.config/sops/age/keys.txt`. Never commit the private key.
+Python 3.12 と [mise](https://mise.jdx.dev/) が必要です。SOPSはageを使って
+`.env.json` を復号します。`.sops.yaml` に記載されたrecipientに対応する秘密鍵を
+`~/.config/sops/age/keys.txt` に配置してください。秘密鍵を絶対にコミットしないでください。
 
 ```shell
 mise trust
@@ -28,29 +24,29 @@ mise install
 mise exec -- uv sync --locked
 ```
 
-`mise` installs `uv` and SOPS, decrypts `.env.json`, and supplies its values as
-environment variables without creating a plaintext file. Edit the encrypted
-file with:
+`mise` が `uv` と SOPS をインストールし、`.env.json` を復号して平文ファイルを
+作成せずに環境変数として値を渡します。暗号化されたファイルを編集するには
+以下を実行してください。
 
 ```shell
 mise exec -- sops .env.json
 ```
 
-`OPENROUTER_API_KEY` is required. Part 15 also uses `COHERE_API_KEY` for
-reranking. SOPS opens the decrypted content in a temporary editor buffer and
-encrypts it again when saving.
+`OPENROUTER_API_KEY` が必須です。パート15では再ランキングのために
+`COHERE_API_KEY` も使用します。SOPSは復号した内容を一時的なエディタバッファで
+開き、保存時に再度暗号化します。
 
-## Run
+## 実行方法
 
-Open a notebook in edit mode:
+ノートブックを編集モードで開きます。
 
 ```shell
 mise exec -- uv run marimo edit rag_from_scratch_1_to_4.py
 ```
 
-The notebooks are split into the following files:
+ノートブックは以下のファイルに分割されています。
 
-| Parts | File |
+| パート | ファイル |
 | --- | --- |
 | 1-4 | `rag_from_scratch_1_to_4.py` |
 | 5-9 | `rag_from_scratch_5_to_9.py` |
@@ -58,18 +54,19 @@ The notebooks are split into the following files:
 | 12-14 | `rag_from_scratch_12_to_14.py` |
 | 15-18 | `rag_from_scratch_15_to_18.py` |
 
-The original Jupyter notebooks are retained in `old/` as migration references.
+元のJupyterノートブックは、移行時の参考資料として `old/` に保持しています。
 
-## Development
+## 開発
 
-Install the Git hook after `uv sync`:
+`uv sync` の後にGit hookをインストールしてください。
 
 ```shell
 mise exec -- uv run pre-commit install
 ```
 
-The hook verifies that `.env.json` is SOPS-encrypted and runs Ruff,
-`marimo check --strict`, and Gitleaks. Run all checks manually with:
+このhookは `.env.json` がSOPSで暗号化されていることを確認したうえで、Ruff、
+`marimo check --strict`、Gitleaksを実行します。すべてのチェックを手動で
+実行するには以下を使用してください。
 
 ```shell
 mise exec -- uv run pre-commit run --all-files
