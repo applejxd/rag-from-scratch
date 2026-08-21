@@ -14,6 +14,7 @@ with app.setup:
     from langchain_core.output_parsers import StrOutputParser
     from langchain_core.prompts import ChatPromptTemplate
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
     DEFAULT_CHAT_MODEL = os.environ.get("MODEL", "openai/gpt-5-nano")
@@ -237,6 +238,8 @@ def _():
     通常の密ベクトル検索が文書全体を一つのベクトルに圧縮するのに対し、ColBERTはクエリと文書の各トークンを別々のベクトルとして保持します。クエリの各トークンについて文書側との最大類似度を求め、その合計で文書を順位付けする「Late Interaction」が特徴です。
 
     元ノートのRAGatouilleによる例は、現在の実装ではPyLateを直接使う形へ置き換えています。`ColBERT` で埋め込みを生成し、`PLAID` インデックスへ保存して検索します。初回実行時はモデルのダウンロードとローカルインデックスの作成が必要です。
+
+    また、使用モデルも元ノートの `colbert-ir/colbertv2.0` から `lightonai/GTE-ModernColBERT-v1` へ変更しています。ライブラリとモデルの両方が異なるため、検索結果を元ノートと直接比較することはできません。
     """)
     return
 
@@ -290,20 +293,10 @@ def _():
 
 @app.cell
 def _(miyazaki_article):
-    def chunk_text(text: str, chunk_size: int = 900, overlap: int = 150):
-        chunks = []
-        start = 0
-        while start < len(text):
-            end = min(start + chunk_size, len(text))
-            chunk = text[start:end].strip()
-            if chunk:
-                chunks.append(chunk)
-            if end >= len(text):
-                break
-            start = max(end - overlap, start + 1)
-        return chunks
-
-    colbert_passages = chunk_text(miyazaki_article)
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=900, chunk_overlap=150
+    )
+    colbert_passages = text_splitter.split_text(miyazaki_article)
     colbert_passage_ids = [
         f"miyazaki-{index}" for index in range(len(colbert_passages))
     ]

@@ -54,6 +54,11 @@ with app.setup:
         return "\n\n".join(doc.page_content for doc in docs)
 
     def load_rag_prompt():
+        """Local equivalent of the LangChain Hub prompt `rlm/rag-prompt`.
+
+        See https://smith.langchain.com/hub/rlm/rag-prompt for the source
+        prompt this template reproduces without depending on the Hub.
+        """
         template = (
             "Answer the question based only on the following context:\n"
             "{context}\n\nQuestion: {question}\n"
