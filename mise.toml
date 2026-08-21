@@ -1,6 +1,6 @@
 [tools]
-sops = "latest"
-uv = "latest"
+sops = "3.13.3"
+uv = "0.8.12"
 
 [env]
 _.file = { path = ".env.json", redact = true }
