@@ -4,11 +4,15 @@
 の Jupyter notebooks を、`uv` で依存関係を管理する
 [marimo](https://marimo.io/) notebooks に移行した学習用リポジトリです。
 
-LLMは大規模ではあるものの固定されたコーパスで学習されているため、非公開情報や最新情報についての推論を苦手とします。Retrieval Augmented Generation（RAG）は、検索した文書に生成内容を根拠付けることで、LLMの知識ベースを拡張する手法です。
+以下は元リポジトリのREADMEからの引用（日本語訳）です。
 
-これらのノートブックは、インデックス作成・検索・生成という基礎から段階的にRAGへの理解を深める
-[動画プレイリスト](https://www.youtube.com/playlist?list=PLfaIDFEXuae2LXbO1_PKyVJiQ23ZztA0x)
-に沿った教材です。
+> LLMは大規模ではあるものの固定されたコーパスで学習されているため、非公開情報や最新情報についての推論を苦手とします。ファインチューニングはこれを緩和する一つの方法ですが、[事実の想起には不向きであることが多く](https://www.anyscale.com/blog/fine-tuning-is-for-form-not-facts)、[コストもかかります](https://www.glean.com/blog/how-to-build-an-ai-assistant-for-the-enterprise)。
+>
+> Retrieval Augmented Generation（RAG）は、外部データソースから検索した文書を用いてin-context learningを通じLLMの生成を根拠付けることで、LLMの知識ベースを拡張する、人気があり強力な手法として登場しました。
+>
+> これらのノートブックは、インデックス作成・検索・生成の基礎から始めてRAGをゼロから理解できるように構成された[動画プレイリスト](https://youtube.com/playlist?list=PLfaIDFEXuae2LXbO1_PKyVJiQ23ZztA0x&feature=shared)に付随するものです。
+>
+> —— [langchain-ai/rag-from-scratch](https://github.com/langchain-ai/rag-from-scratch) の README より翻訳・引用
 
 ![rag_detail_v2](https://github.com/langchain-ai/rag-from-scratch/assets/122662504/54a2d76c-b07e-49e7-b4ce-fc45667360a1)
 
