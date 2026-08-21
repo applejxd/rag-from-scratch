@@ -5,6 +5,7 @@ app = marimo.App()
 
 with app.setup:
     import os
+    from operator import itemgetter
 
     import bs4
     import marimo as mo
@@ -63,11 +64,11 @@ with app.setup:
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    # Rag From Scratch: Query Transformations
+    # RAGをゼロから学ぶ：クエリ変換
 
-    Query transformations are a set of approaches focused on re-writing and / or modifying questions for retrieval.
+    クエリ変換とは、検索に適した形へ質問を書き換えたり修正したりする一連の手法です。
 
-    ![Screenshot 2024-03-25 at 8.08.30 PM.png](./imgs/query_overview.png)
+    ![クエリ変換の概要](./imgs/query_overview.png)
     """)
     return
 
@@ -75,17 +76,19 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ## Part 5: Multi Query
+    ## パート5：Multi Query
 
-    Flow:
+    一つの質問を異なる観点の複数クエリへ言い換え、それぞれの検索結果を重複排除して統合します。単一の表現だけでは取得できない関連文書を補うことが目的です。
 
-    ![Screenshot 2024-02-12 at 12.39.59 PM.png](./imgs/multi_query.png)
+    処理の流れ：
 
-    Docs:
+    ![Multi Queryの流れ](./imgs/multi_query.png)
+
+    ドキュメント：
 
     * https://python.langchain.com/docs/modules/data_connection/retrievers/MultiQueryRetriever
 
-    ### Index
+    ### インデックス
     """)
     return
 
@@ -95,7 +98,7 @@ def _():
     #### INDEXING ####
 
     # Load blog
-    loader = WebBaseLoader(
+    blog_loader = WebBaseLoader(
         web_paths=("https://lilianweng.github.io/posts/2023-06-23-agent/",),
         bs_kwargs={
             "parse_only": bs4.SoupStrainer(
@@ -103,7 +106,7 @@ def _():
             )
         },
     )
-    blog_docs = loader.load()
+    blog_documents = blog_loader.load()
 
     # Split
     text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
@@ -111,10 +114,12 @@ def _():
     )
 
     # Make splits
-    splits = text_splitter.split_documents(blog_docs)
+    document_chunks = text_splitter.split_documents(blog_documents)
 
     # Index
-    vectorstore = Chroma.from_documents(documents=splits, embedding=make_embeddings())
+    vectorstore = Chroma.from_documents(
+        documents=document_chunks, embedding=make_embeddings()
+    )
 
     retriever = vectorstore.as_retriever()
     return (retriever,)
@@ -123,7 +128,9 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ### Prompt
+    ### プロンプト
+
+    LLMに5種類の検索クエリを改行区切りで生成させます。生成した各クエリへ同じリトリーバーを適用するため、LCELの `retriever.map()` を使用します。
     """)
     return
 
@@ -131,123 +138,147 @@ def _():
 @app.cell
 def _():
     # Multi Query: Different Perspectives
-    template = """You are an AI language model assistant. Your task is to generate five 
-    different versions of the given user question to retrieve relevant documents from a vector 
+    multi_query_template = """You are an AI language model assistant. Your task is to generate five
+    different versions of the given user question to retrieve relevant documents from a vector
     database. By generating multiple perspectives on the user question, your goal is to help
-    the user overcome some of the limitations of the distance-based similarity search. 
+    the user overcome some of the limitations of the distance-based similarity search.
     Provide these alternative questions separated by newlines. Original question: {question}"""
-    prompt_perspectives = ChatPromptTemplate.from_template(template)
+    multi_query_prompt = ChatPromptTemplate.from_template(multi_query_template)
 
-    generate_queries = (
-        prompt_perspectives
+    multi_query_generator = (
+        multi_query_prompt
         | make_chat_model()
         | StrOutputParser()
         | (lambda x: x.split("\n"))
     )
-    return (generate_queries,)
+    return (multi_query_generator,)
 
 
 @app.cell
-def _(generate_queries, retriever):
+def _(multi_query_generator, retriever):
     def get_unique_union(documents: list[list]):
-        """ Unique union of retrieved docs """
-        # Flatten list of lists, and convert each Document to string
+        """Return unique documents from multiple retrieval result lists."""
         flattened_docs = [dumps(doc) for sublist in documents for doc in sublist]
-        # Get unique documents
         unique_docs = list(set(flattened_docs))
-        # Return
         return [loads(doc) for doc in unique_docs]
 
-    # Retrieve
-    question = "What is task decomposition for LLM agents?"
-    retrieval_chain = generate_queries | retriever.map() | get_unique_union
-    docs = retrieval_chain.invoke({"question":question})
-    len(docs)
-    return question, retrieval_chain
+    retrieval_question = "What is task decomposition for LLM agents?"
+    multi_query_retrieval_chain = (
+        multi_query_generator | retriever.map() | get_unique_union
+    )
+    multi_query_documents = multi_query_retrieval_chain.invoke(
+        {"question": retrieval_question}
+    )
+    len(multi_query_documents)
+    return multi_query_retrieval_chain, retrieval_question
 
 
 @app.cell
-def _(question, retrieval_chain):
-    from operator import itemgetter
-    template_1 = 'Answer the following question based on this context:\n\n{context}\n\nQuestion: {question}\n'
-    prompt = ChatPromptTemplate.from_template(template_1)
-    # RAG
-    llm = make_chat_model()
-    final_rag_chain = {'context': retrieval_chain, 'question': itemgetter('question')} | prompt | llm | StrOutputParser()
-    final_rag_chain.invoke({'question': question})
-    return itemgetter, llm
+def _(multi_query_retrieval_chain, retrieval_question):
+    answer_prompt = load_rag_prompt()
+    multi_query_answer_chain = (
+        {
+            "context": multi_query_retrieval_chain,
+            "question": itemgetter("question"),
+        }
+        | answer_prompt
+        | make_chat_model()
+        | StrOutputParser()
+    )
+    multi_query_answer_chain.invoke({"question": retrieval_question})
+    return
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ## Part 6: RAG-Fusion
+    ## パート6：RAG-Fusion
 
-    Flow:
+    RAG-Fusionも複数クエリで検索しますが、結果を単純に結合せず、各ランキングで上位に現れる文書へ高いスコアを与えるReciprocal Rank Fusion（RRF）で再順位付けします。検索システムごとの生スコアを比較せず、順位だけで統合できる点が特徴です。
 
-    ![Screenshot 2024-02-12 at 12.41.36 PM.png](./imgs/rag_fusion.png)
+    処理の流れ：
 
-    Docs:
+    ![RAG-Fusionの流れ](./imgs/rag_fusion.png)
+
+    ドキュメント：
 
     * https://github.com/langchain-ai/langchain/blob/master/cookbook/rag_fusion.ipynb?ref=blog.langchain.dev
 
-    Blog / repo:
+    ブログ／リポジトリ：
 
     * https://towardsdatascience.com/forget-rag-the-future-is-rag-fusion-1147298d8ad1
 
-    ### Prompt
+    ### プロンプト
     """)
     return
 
 
 @app.cell
 def _():
-    template_2 = 'You are a helpful assistant that generates multiple search queries based on a single input query. \n\nGenerate multiple search queries related to: {question} \n\nOutput (4 queries):'
+    rag_fusion_template = 'You are a helpful assistant that generates multiple search queries based on a single input query. \n\nGenerate multiple search queries related to: {question} \n\nOutput (4 queries):'
     # RAG-Fusion: Related
-    prompt_rag_fusion = ChatPromptTemplate.from_template(template_2)
-    return (prompt_rag_fusion,)
+    rag_fusion_prompt = ChatPromptTemplate.from_template(rag_fusion_template)
+    return (rag_fusion_prompt,)
 
 
 @app.cell
-def _(prompt_rag_fusion):
-    generate_queries_1 = prompt_rag_fusion | make_chat_model() | StrOutputParser() | (lambda x: x.split('\n'))
-    return (generate_queries_1,)
+def _(rag_fusion_prompt):
+    rag_fusion_query_generator = (
+        rag_fusion_prompt
+        | make_chat_model()
+        | StrOutputParser()
+        | (lambda x: x.split("\n"))
+    )
+    return (rag_fusion_query_generator,)
 
 
 @app.cell
-def _(generate_queries_1, question, retriever):
+def _(rag_fusion_query_generator, retrieval_question, retriever):
     def reciprocal_rank_fusion(results: list[list], k=60):
-        """ Reciprocal_rank_fusion that takes multiple lists of ranked documents 
-            and an optional parameter k used in the RRF formula """
+        """Combine ranked result lists using reciprocal rank fusion."""
         fused_scores = {}
-        for docs in results:
-            for rank, doc in enumerate(docs):
-                doc_str = dumps(doc)  # Initialize a dictionary to hold fused scores for each unique document
+        for documents in results:
+            for rank, document in enumerate(documents):
+                doc_str = dumps(document)
                 if doc_str not in fused_scores:
                     fused_scores[doc_str] = 0
-                fused_scores[doc_str] = fused_scores[doc_str] + 1 / (rank + k)
-        reranked_results = [(loads(doc), score) for doc, score in sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)]  # Iterate through each document in the list, with its rank (position in the list)
-        return reranked_results
-    retrieval_chain_rag_fusion = generate_queries_1 | retriever.map() | reciprocal_rank_fusion  # Convert the document to a string format to use as a key (assumes documents can be serialized to JSON)
-    docs_1 = retrieval_chain_rag_fusion.invoke({'question': question})
-    len(docs_1)  # If the document is not yet in the fused_scores dictionary, add it with an initial score of 0  # Retrieve the current score of the document, if any  # Update the score of the document using the RRF formula: 1 / (rank + k)  # Sort the documents based on their fused scores in descending order to get the final reranked results  # Return the reranked results as a list of tuples, each containing the document and its fused score
-    return (retrieval_chain_rag_fusion,)
+                fused_scores[doc_str] += 1 / (rank + k)
+        return [
+            (loads(doc), score)
+            for doc, score in sorted(
+                fused_scores.items(), key=lambda item: item[1], reverse=True
+            )
+        ]
+
+    rag_fusion_retrieval_chain = (
+        rag_fusion_query_generator | retriever.map() | reciprocal_rank_fusion
+    )
+    fused_documents = rag_fusion_retrieval_chain.invoke(
+        {"question": retrieval_question}
+    )
+    len(fused_documents)
+    return (rag_fusion_retrieval_chain,)
 
 
 @app.cell
-def _(itemgetter, llm, question, retrieval_chain_rag_fusion):
-    template_3 = 'Answer the following question based on this context:\n\n{context}\n\nQuestion: {question}\n'
-    prompt_1 = ChatPromptTemplate.from_template(template_3)
-    # RAG
-    final_rag_chain_1 = {'context': retrieval_chain_rag_fusion, 'question': itemgetter('question')} | prompt_1 | llm | StrOutputParser()
-    final_rag_chain_1.invoke({'question': question})
+def _(rag_fusion_retrieval_chain, retrieval_question):
+    rag_fusion_answer_chain = (
+        {
+            "context": rag_fusion_retrieval_chain,
+            "question": itemgetter("question"),
+        }
+        | load_rag_prompt()
+        | make_chat_model()
+        | StrOutputParser()
+    )
+    rag_fusion_answer_chain.invoke({"question": retrieval_question})
     return
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    Trace:
+    トレース：
 
     https://smith.langchain.com/public/071202c9-9f4d-41b1-bf9d-86b7c5a7525b/r
     """)
@@ -257,45 +288,54 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ## Part 7: Decomposition
+    ## パート7：分解
+
+    複雑な質問を、単独で検索・回答できる複数のサブ質問へ分解します。ここでは、前の回答を次の質問の背景として順に渡す方法と、各サブ質問を独立に回答して最後に統合する方法を比較します。
     """)
     return
 
 
 @app.cell
 def _():
-    template_4 = 'You are a helpful assistant that generates multiple sub-questions related to an input question. \n\nThe goal is to break down the input into a set of sub-problems / sub-questions that can be answers in isolation. \n\nGenerate multiple search queries related to: {question} \n\nOutput (3 queries):'
+    subquestion_template = 'You are a helpful assistant that generates multiple sub-questions related to an input question. \n\nThe goal is to break down the input into a set of sub-problems / sub-questions that can be answers in isolation. \n\nGenerate multiple search queries related to: {question} \n\nOutput (3 queries):'
     # Decomposition
-    prompt_decomposition = ChatPromptTemplate.from_template(template_4)
-    return (prompt_decomposition,)
+    subquestion_prompt = ChatPromptTemplate.from_template(subquestion_template)
+    return (subquestion_prompt,)
 
 
 @app.cell
-def _(prompt_decomposition):
-    llm_1 = make_chat_model()
-    generate_queries_decomposition = prompt_decomposition | llm_1 | StrOutputParser() | (lambda x: x.split('\n'))
-    question_1 = 'What are the main components of an LLM-powered autonomous agent system?'
-    # LLM
-    # Chain
-    # Run
-    questions = generate_queries_decomposition.invoke({'question': question_1})
-    return generate_queries_decomposition, question_1, questions
+def _(subquestion_prompt):
+    subquestion_generator = (
+        subquestion_prompt
+        | make_chat_model()
+        | StrOutputParser()
+        | (lambda x: x.split("\n"))
+    )
+    decomposition_question = (
+        "What are the main components of an LLM-powered autonomous agent system?"
+    )
+    subquestions = subquestion_generator.invoke(
+        {"question": decomposition_question}
+    )
+    return decomposition_question, subquestion_generator, subquestions
 
 
 @app.cell
-def _(questions):
-    questions
+def _(subquestions):
+    subquestions
     return
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ### Answer recursively
+    ### 再帰的に回答する
 
-    ![Screenshot 2024-02-18 at 1.55.32 PM.png](./imgs/answer_recursively.png)
+    サブ質問を順番に処理し、それまでに得た質問と回答の組を次のプロンプトへ追加します。後続の回答が先行する回答を参照できる一方、処理は直列になります。
 
-    Papers:
+    ![再帰的に回答する流れ](./imgs/answer_recursively.png)
+
+    論文：
 
     * https://arxiv.org/pdf/2205.10625.pdf
     * https://arxiv.org/abs/2212.10509.pdf
@@ -305,46 +345,58 @@ def _():
 
 @app.cell
 def _():
-    # Prompt
-    template_5 = 'Here is the question you need to answer:\n\n\n --- \n {question} \n --- \n\n\nHere is any available background question + answer pairs:\n\n\n --- \n {q_a_pairs} \n --- \n\n\nHere is additional context relevant to the question: \n\n\n --- \n {context} \n --- \n\n\nUse the above context and any background question + answer pairs to answer the question: \n {question}\n'
-    decomposition_prompt = ChatPromptTemplate.from_template(template_5)
-    return (decomposition_prompt,)
+    recursive_answer_template = 'Here is the question you need to answer:\n\n\n --- \n {question} \n --- \n\n\nHere is any available background question + answer pairs:\n\n\n --- \n {q_a_pairs} \n --- \n\n\nHere is additional context relevant to the question: \n\n\n --- \n {context} \n --- \n\n\nUse the above context and any background question + answer pairs to answer the question: \n {question}\n'
+    recursive_answer_prompt = ChatPromptTemplate.from_template(
+        recursive_answer_template
+    )
+    return (recursive_answer_prompt,)
 
 
 @app.cell
-def _(decomposition_prompt, itemgetter, questions, retriever):
+def _(recursive_answer_prompt, retriever, subquestions):
     def format_qa_pair(question, answer):
         """Format Q and A pair"""
-        formatted_string = ''
-        formatted_string = formatted_string + f'Question: {question}\nAnswer: {answer}\n\n'
-        return formatted_string.strip()
-    llm_2 = make_chat_model()
-    q_a_pairs = ''
-    for q in questions:
-        rag_chain = {'context': itemgetter('question') | retriever | format_docs, 'question': itemgetter('question'), 'q_a_pairs': itemgetter('q_a_pairs')} | decomposition_prompt | llm_2 | StrOutputParser()
-        answer = rag_chain.invoke({'question': q, 'q_a_pairs': q_a_pairs})
-    # llm
-        q_a_pair = format_qa_pair(q, answer)
-        q_a_pairs = q_a_pairs + '\n---\n' + q_a_pair
-    return answer, llm_2
+        return f"Question: {question}\nAnswer: {answer}".strip()
+
+    decomposition_model = make_chat_model()
+    accumulated_qa = ""
+    recursive_answer = ""
+    recursive_rag_chain = (
+        {
+            "context": itemgetter("question") | retriever | format_docs,
+            "question": itemgetter("question"),
+            "q_a_pairs": itemgetter("q_a_pairs"),
+        }
+        | recursive_answer_prompt
+        | decomposition_model
+        | StrOutputParser()
+    )
+    for subquestion in subquestions:
+        recursive_answer = recursive_rag_chain.invoke(
+            {"question": subquestion, "q_a_pairs": accumulated_qa}
+        )
+        accumulated_qa += (
+            "\n---\n" + format_qa_pair(subquestion, recursive_answer)
+        )
+    return decomposition_model, recursive_answer
 
 
 @app.cell
-def _(answer):
-    answer
+def _(recursive_answer):
+    recursive_answer
     return
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    Trace:
+    トレース：
 
-    Question 1: https://smith.langchain.com/public/faefde73-0ecb-4328-8fee-a237904115c0/r
+    質問1：https://smith.langchain.com/public/faefde73-0ecb-4328-8fee-a237904115c0/r
 
-    Question 2: https://smith.langchain.com/public/6142cad3-b314-454e-b2c9-15146cfcce78/r
+    質問2：https://smith.langchain.com/public/6142cad3-b314-454e-b2c9-15146cfcce78/r
 
-    Question 3: https://smith.langchain.com/public/84bdca0f-0fa4-46d4-9f89-a7f25bd857fe/r
+    質問3：https://smith.langchain.com/public/84bdca0f-0fa4-46d4-9f89-a7f25bd857fe/r
     """)
     return
 
@@ -352,54 +404,69 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ### Answer individually
+    ### 個別に回答する
 
-    ![Screenshot 2024-02-18 at 2.00.59 PM.png](./imgs/answer_individualy.png)
+    各サブ質問を互いに独立して検索・回答するため、並列化しやすい方法です。最後に質問と回答の組を一つのコンテキストへまとめ、元の質問に対する回答を合成します。
+
+    ![個別に回答する流れ](./imgs/answer_individualy.png)
     """)
     return
 
 
 @app.cell
-def _(generate_queries_decomposition, llm_2, question_1, retriever):
-    # Answer each sub-question individually 
-    prompt_rag = load_rag_prompt()
+def _(decomposition_model, decomposition_question, retriever, subquestion_generator):
+    def retrieve_and_answer_subquestions(question):
+        generated_subquestions = subquestion_generator.invoke({"question": question})
+        answers = []
+        for subquestion in generated_subquestions:
+            retrieved_documents = retriever.invoke(subquestion)
+            answer = (
+                load_rag_prompt() | decomposition_model | StrOutputParser()
+            ).invoke(
+                {
+                    "context": format_docs(retrieved_documents),
+                    "question": subquestion,
+                }
+            )
+            answers.append(answer)
+        return answers, generated_subquestions
 
-    def retrieve_and_rag(question, prompt_rag, sub_question_generator_chain):
-        """RAG on each sub-question"""
-        sub_questions = sub_question_generator_chain.invoke({'question': question})
-    # RAG prompt
-        rag_results = []
-        for sub_question in sub_questions:
-            retrieved_docs = retriever.invoke(sub_question)
-            answer = (prompt_rag | llm_2 | StrOutputParser()).invoke({'context': format_docs(retrieved_docs), 'question': sub_question})
-            rag_results.append(answer)
-        return (rag_results, sub_questions)  # Use our decomposition / 
-    # Wrap the retrieval and RAG process in a RunnableLambda for integration into a chain
-    answers, questions_1 = retrieve_and_rag(question_1, prompt_rag, generate_queries_decomposition)  # Initialize a list to hold RAG chain results  # Retrieve documents for each sub-question  # Use retrieved documents and sub-question in RAG chain
-    return answers, questions_1
+    individual_answers, individual_subquestions = (
+        retrieve_and_answer_subquestions(decomposition_question)
+    )
+    return individual_answers, individual_subquestions
 
 
 @app.cell
-def _(answers, llm_2, question_1, questions_1):
+def _(
+    decomposition_model,
+    decomposition_question,
+    individual_answers,
+    individual_subquestions,
+):
     def format_qa_pairs(questions, answers):
         """Format Q and A pairs"""
-        formatted_string = ''
+        formatted_string = ""
         for i, (question, answer) in enumerate(zip(questions, answers), start=1):
-            formatted_string = formatted_string + f'Question {i}: {question}\nAnswer {i}: {answer}\n\n'
+            formatted_string += (
+                f"Question {i}: {question}\nAnswer {i}: {answer}\n\n"
+            )
         return formatted_string.strip()
-    context = format_qa_pairs(questions_1, answers)
-    template_6 = 'Here is a set of Q+A pairs:\n\n{context}\n\nUse these to synthesize an answer to the question: {question}\n'
-    prompt_2 = ChatPromptTemplate.from_template(template_6)
-    final_rag_chain_2 = prompt_2 | llm_2 | StrOutputParser()
-    # Prompt
-    final_rag_chain_2.invoke({'context': context, 'question': question_1})
+
+    qa_context = format_qa_pairs(individual_subquestions, individual_answers)
+    synthesis_template = 'Here is a set of Q+A pairs:\n\n{context}\n\nUse these to synthesize an answer to the question: {question}\n'
+    synthesis_prompt = ChatPromptTemplate.from_template(synthesis_template)
+    synthesis_chain = synthesis_prompt | decomposition_model | StrOutputParser()
+    synthesis_chain.invoke(
+        {"context": qa_context, "question": decomposition_question}
+    )
     return
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    Trace:
+    トレース：
 
     https://smith.langchain.com/public/d8f26f75-3fb8-498a-a3a2-6532aa77f56b/r
     """)
@@ -409,11 +476,13 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ## Part 8: Step Back
+    ## パート8：Step Back
 
-    ![Screenshot 2024-02-12 at 1.14.43 PM.png](./imgs/step_back.png)
+    元の質問を、より一般的で答えやすい「一歩引いた質問」へ言い換えます。元の質問と一般化した質問の両方で検索し、具体的な文脈と背景知識を合わせて回答します。
 
-    Paper:
+    ![Step Backの流れ](./imgs/step_back.png)
+
+    論文：
 
     * https://arxiv.org/pdf/2310.06117.pdf
     """)
@@ -422,45 +491,81 @@ def _():
 
 @app.cell
 def _():
-    # Few Shot Examples
-    examples = [{'input': 'Could the members of The Police perform lawful arrests?', 'output': 'what can the members of The Police do?'}, {'input': 'Jan Sindel’s was born in what country?', 'output': 'what is Jan Sindel’s personal history?'}]
-    example_prompt = ChatPromptTemplate.from_messages([('human', '{input}'), ('ai', '{output}')])
-    few_shot_prompt = FewShotChatMessagePromptTemplate(example_prompt=example_prompt, examples=examples)
-    # We now transform these to example messages
-    prompt_3 = ChatPromptTemplate.from_messages([('system', 'You are an expert at world knowledge. Your task is to step back and paraphrase a question to a more generic step-back question, which is easier to answer. Here are a few examples:'), few_shot_prompt, ('user', '{question}')])  # Few shot examples  # New question
-    return (prompt_3,)
+    examples = [
+        {
+            "input": "Could the members of The Police perform lawful arrests?",
+            "output": "what can the members of The Police do?",
+        },
+        {
+            "input": "Jan Sindel’s was born in what country?",
+            "output": "what is Jan Sindel’s personal history?",
+        },
+    ]
+    example_prompt = ChatPromptTemplate.from_messages(
+        [("human", "{input}"), ("ai", "{output}")]
+    )
+    few_shot_prompt = FewShotChatMessagePromptTemplate(
+        example_prompt=example_prompt, examples=examples
+    )
+    step_back_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You are an expert at world knowledge. Your task is to step back and paraphrase a question to a more generic step-back question, which is easier to answer. Here are a few examples:",
+            ),
+            few_shot_prompt,
+            ("user", "{question}"),
+        ]
+    )
+    return (step_back_prompt,)
 
 
 @app.cell
-def _(prompt_3):
-    generate_queries_step_back = prompt_3 | make_chat_model() | StrOutputParser()
-    question_2 = 'What is task decomposition for LLM agents?'
-    generate_queries_step_back.invoke({'question': question_2})
-    return generate_queries_step_back, question_2
+def _(step_back_prompt):
+    step_back_query_generator = (
+        step_back_prompt | make_chat_model() | StrOutputParser()
+    )
+    step_back_question = "What is task decomposition for LLM agents?"
+    step_back_query_generator.invoke({"question": step_back_question})
+    return step_back_query_generator, step_back_question
 
 
 @app.cell
-def _(generate_queries_step_back, question_2, retriever):
-    # Response prompt 
+def _(retriever, step_back_query_generator, step_back_question):
     response_prompt_template = 'You are an expert of world knowledge. I am going to ask you a question. Your response should be comprehensive and not contradicted with the following context if they are relevant. Otherwise, ignore them if they are not relevant.\n\n# {normal_context}\n# {step_back_context}\n\n# Original Question: {question}\n# Answer:'
     response_prompt = ChatPromptTemplate.from_template(response_prompt_template)
-    chain = {'normal_context': RunnableLambda(lambda x: x['question']) | retriever | format_docs, 'step_back_context': generate_queries_step_back | retriever | format_docs, 'question': lambda x: x['question']} | response_prompt | make_chat_model() | StrOutputParser()
-    chain.invoke({'question': question_2})  # Retrieve context using the normal question  # Retrieve context using the step-back question  # Pass on the question
+    step_back_answer_chain = (
+        {
+            "normal_context": RunnableLambda(lambda x: x["question"])
+            | retriever
+            | format_docs,
+            "step_back_context": step_back_query_generator
+            | retriever
+            | format_docs,
+            "question": lambda x: x["question"],
+        }
+        | response_prompt
+        | make_chat_model()
+        | StrOutputParser()
+    )
+    step_back_answer_chain.invoke({"question": step_back_question})
     return
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ## Part 9: HyDE
+    ## パート9：HyDE
 
-    ![Screenshot 2024-02-12 at 1.12.45 PM.png](./imgs/HyDE.png)
+    HyDEは、質問へ直接回答する仮想文書を先にLLMで生成し、その文書の埋め込みを検索クエリとして使います。短い質問よりも実文書に近い表現で検索できるため、質問と文書の表現差を埋められる場合があります。
 
-    Docs:
+    ![HyDEの流れ](./imgs/HyDE.png)
+
+    ドキュメント：
 
     * https://github.com/langchain-ai/langchain/blob/master/cookbook/hypothetical_document_embeddings.ipynb
 
-    Paper:
+    論文：
 
     * https://arxiv.org/abs/2212.10496
     """)
@@ -469,32 +574,30 @@ def _():
 
 @app.cell
 def _():
-    template_7 = 'Please write a scientific paper passage to answer the question\nQuestion: {question}\nPassage:'
-    prompt_hyde = ChatPromptTemplate.from_template(template_7)
-    # HyDE document generation
-    generate_docs_for_retrieval = prompt_hyde | make_chat_model() | StrOutputParser()
-    question_3 = 'What is task decomposition for LLM agents?'
-    # Run
-    generate_docs_for_retrieval.invoke({'question': question_3})
-    return generate_docs_for_retrieval, question_3
+    hyde_template = 'Please write a scientific paper passage to answer the question\nQuestion: {question}\nPassage:'
+    hyde_prompt = ChatPromptTemplate.from_template(hyde_template)
+    hypothetical_document_generator = (
+        hyde_prompt | make_chat_model() | StrOutputParser()
+    )
+    hyde_question = "What is task decomposition for LLM agents?"
+    hypothetical_document_generator.invoke({"question": hyde_question})
+    return hypothetical_document_generator, hyde_question
 
 
 @app.cell
-def _(generate_docs_for_retrieval, question_3, retriever):
-    # Retrieve
-    retrieval_chain_1 = generate_docs_for_retrieval | retriever
-    retrieved_docs = retrieval_chain_1.invoke({'question': question_3})
-    retrieved_docs
-    return (retrieved_docs,)
+def _(hyde_question, hypothetical_document_generator, retriever):
+    hyde_retrieval_chain = hypothetical_document_generator | retriever
+    hyde_documents = hyde_retrieval_chain.invoke({"question": hyde_question})
+    hyde_documents
+    return (hyde_documents,)
 
 
 @app.cell
-def _(llm_2, question_3, retrieved_docs):
-    # RAG
-    template_8 = 'Answer the following question based on this context:\n\n{context}\n\nQuestion: {question}\n'
-    prompt_4 = ChatPromptTemplate.from_template(template_8)
-    final_rag_chain_3 = prompt_4 | llm_2 | StrOutputParser()
-    final_rag_chain_3.invoke({'context': format_docs(retrieved_docs), 'question': question_3})
+def _(hyde_documents, hyde_question):
+    hyde_answer_chain = load_rag_prompt() | make_chat_model() | StrOutputParser()
+    hyde_answer_chain.invoke(
+        {"context": format_docs(hyde_documents), "question": hyde_question}
+    )
     return
 
 

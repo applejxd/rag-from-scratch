@@ -53,9 +53,9 @@ with app.setup:
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    # Rag From Scratch: Routing
+    # RAGをゼロから学ぶ：ルーティング
 
-    ![image.png](./imgs/routing_overview.png)
+    ![ルーティングの概要](./imgs/routing_overview.png)
     """)
     return
 
@@ -63,15 +63,17 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ## Part 10: Logical and Semantic routing
+    ## パート10：論理ルーティングとセマンティックルーティング
 
-    Use function-calling for classification.
+    ルーティングは、質問に応じて使用するデータソースやプロンプトを切り替える処理です。論理ルーティングではLLMの構造化出力で離散的な行き先を選び、セマンティックルーティングでは埋め込みの類似度で最も近い行き先を選びます。
 
-    Flow:
+    まず、Function Callingを使って質問をプログラミング言語別のデータソースへ分類します。
 
-    ![Screenshot 2024-03-15 at 3.29.30 PM.png](./imgs/logical_and_semantic_routing.png)
+    処理の流れ：
 
-    Docs:
+    ![論理ルーティングとセマンティックルーティング](./imgs/logical_and_semantic_routing.png)
+
+    ドキュメント：
 
     https://python.langchain.com/docs/use_cases/query_analysis/techniques/routing#routing-to-multiple-indexes
     """)
@@ -113,16 +115,16 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    Note: we used function calling to produce structured output.
+    `with_structured_output(RouteQuery)` により、自由文ではなく `datasource` フィールドを持つ値として結果を受け取ります。候補を型で限定すると、後続の分岐を決定的に記述できます。
 
-    ![Screenshot 2024-03-16 at 12.38.23 PM.png](./imgs/llm.with_structured_output.png)
+    ![LLMによる構造化出力](./imgs/llm.with_structured_output.png)
     """)
     return
 
 
 @app.cell
 def _(router):
-    question = """Why doesn't the following code work:
+    routing_question = """Why doesn't the following code work:
 
     from langchain_core.prompts import ChatPromptTemplate
 
@@ -130,26 +132,26 @@ def _(router):
     prompt.invoke("french")
     """
 
-    result = router.invoke({"question": question})
-    return question, result
+    route_result = router.invoke({"question": routing_question})
+    return route_result, routing_question
 
 
 @app.cell
-def _(result):
-    result
+def _(route_result):
+    route_result
     return
 
 
 @app.cell
-def _(result):
-    result.datasource
+def _(route_result):
+    route_result.datasource
     return
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    Once we have this, it is trivial to define a branch that uses `result.datasource`
+    選択された `route_result.datasource` を使い、対応する検索チェーンへ処理を振り分けます。この例では文字列を返していますが、実際には各データソース用のRAGチェーンを接続します。
 
     https://python.langchain.com/docs/expression_language/how_to/routing
     """)
@@ -158,31 +160,27 @@ def _():
 
 @app.cell
 def _(router):
-    def choose_route(result):
-        if "python_docs" in result.datasource.lower():
-            ### Logic here 
+    def choose_route(route):
+        if "python_docs" in route.datasource.lower():
             return "chain for python_docs"
-        elif "js_docs" in result.datasource.lower():
-            ### Logic here 
+        elif "js_docs" in route.datasource.lower():
             return "chain for js_docs"
-        else:
-            ### Logic here 
-            return "golang_docs"
+        return "chain for golang_docs"
 
-    full_chain = router | RunnableLambda(choose_route)
-    return (full_chain,)
+    logical_routing_chain = router | RunnableLambda(choose_route)
+    return (logical_routing_chain,)
 
 
 @app.cell
-def _(full_chain, question):
-    full_chain.invoke({"question": question})
+def _(logical_routing_chain, routing_question):
+    logical_routing_chain.invoke({"question": routing_question})
     return
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    Trace:
+    トレース：
 
     https://smith.langchain.com/public/c2ca61b4-3810-45d0-a156-3d6a73e9ee2a/r
     """)
@@ -192,13 +190,15 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ### Semantic routing
+    ### セマンティックルーティング
 
-    Flow:
+    候補プロンプトを事前に埋め込み、質問の埋め込みとのコサイン類似度が最も高いプロンプトを選びます。固定ラベルへ分類するより柔軟ですが、候補間の意味が近い場合は境界が曖昧になります。
 
-    ![Screenshot 2024-03-15 at 3.30.08 PM.png](./imgs/semantic_routing.png)
+    処理の流れ：
 
-    Docs:
+    ![セマンティックルーティングの流れ](./imgs/semantic_routing.png)
+
+    ドキュメント：
 
     https://python.langchain.com/docs/expression_language/cookbook/embedding_router
     """)
@@ -214,26 +214,30 @@ def _():
     prompt_templates = [physics_template, math_template]
     prompt_embeddings = embeddings.embed_documents(prompt_templates)
 
-    def prompt_router(input):
-        query_embedding = embeddings.embed_query(input['query'])
+    def prompt_router(inputs):
+        query_embedding = embeddings.embed_query(inputs["query"])
         similarities = [
             cosine_similarity(query_embedding, prompt_embedding)
             for prompt_embedding in prompt_embeddings
         ]
         most_similar = prompt_templates[int(np.argmax(similarities))]
-        print('Using MATH' if most_similar == math_template else 'Using PHYSICS')
+        print("Using MATH" if most_similar == math_template else "Using PHYSICS")
         return PromptTemplate.from_template(most_similar)
-    chain = {'query': RunnablePassthrough()} | RunnableLambda(prompt_router) | make_chat_model() | StrOutputParser()
-    # Embed prompts
-    # Route question to prompt 
-    print(chain.invoke("What's a black hole"))  # Embed question  # Compute similarity  # Chosen prompt 
+
+    semantic_routing_chain = (
+        {"query": RunnablePassthrough()}
+        | RunnableLambda(prompt_router)
+        | make_chat_model()
+        | StrOutputParser()
+    )
+    print(semantic_routing_chain.invoke("What's a black hole"))
     return
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    Trace:
+    トレース：
 
     https://smith.langchain.com/public/98c25405-2631-4de8-b12a-1891aded3359/r
     """)
@@ -243,11 +247,11 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    # Rag From Scratch: Query Construction
+    # RAGをゼロから学ぶ：クエリ構築
 
-    ![Screenshot 2024-03-25 at 8.20.28 PM.png](./imgs/query_construction.png)
+    ![クエリ構築の概要](./imgs/query_construction.png)
 
-    For graph and SQL, see helpful resources:
+    クエリ構築では、自然言語の質問を検索システムが解釈できる構造へ変換します。ここではメタデータフィルターを扱い、グラフやSQLについては以下の参考資料を参照します。
 
     https://blog.langchain.dev/query-construction/
 
@@ -259,19 +263,15 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ## Part 11: Query structuring for metadata filters
+    ## パート11：メタデータフィルター向けのクエリ構造化
 
-    Flow:
+    処理の流れ：
 
-    ![Screenshot 2024-03-16 at 1.12.10 PM.png](./imgs/query_structuring.png)
+    ![クエリ構造化の流れ](./imgs/query_structuring.png)
 
-    Many vectorstores contain metadata fields.
+    ベクトル類似度だけで検索すると、公開日や動画の長さといった条件を正確に扱えません。LLMで質問を意味検索用テキストとメタデータ条件へ分離し、ベクトル検索とフィルターを組み合わせます。まず、YouTubeの文字起こしに付随するメタデータを確認します。
 
-    This makes it possible to filter for specific chunks based on metadata.
-
-    Let's look at some example metadata we might see in a database of YouTube transcripts.
-
-    Docs:
+    ドキュメント：
 
     https://python.langchain.com/docs/use_cases/query_analysis/techniques/structuring
     """)
@@ -280,25 +280,23 @@ def _():
 
 @app.cell
 def _():
-    docs = YoutubeLoader.from_youtube_url(
+    transcript_documents = YoutubeLoader.from_youtube_url(
         "https://www.youtube.com/watch?v=pbAd8O1Lvm4", add_video_info=False
     ).load()
 
-    docs[0].metadata
+    transcript_documents[0].metadata
     return
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    Let’s assume we’ve built an index that:
+    次の機能を持つインデックスを構築したと仮定します。
 
-    1. Allows us to perform unstructured search over the `contents` and `title` of each document
-    2. And to use range filtering on `view count`, `publication date`, and `length`.
+    1. 各ドキュメントの `contents` と `title` を対象に非構造化検索ができる
+    2. `view count`、`publication date`、`length` を範囲指定で絞り込める
 
-    We want to convert natural language into structured search queries.
-
-    We can define a schema for structured search queries.
+    `TutorialSearch` スキーマは、意味検索に使う文字列と範囲フィルターを分離します。LLMは質問に明示された条件だけを各フィールドへ設定します。
     """)
     return
 
@@ -325,18 +323,19 @@ class TutorialSearch(BaseModel):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    Now, we prompt the LLM to produce queries.
+    次に、`TutorialSearch` を構造化出力として指定し、自然言語から検索条件を生成します。以下の例では、質問が具体的になるにつれて公開年や動画時間のフィールドが追加されます。
     """)
     return
 
 
 @app.cell
 def _():
-    system_1 = 'You are an expert at converting user questions into database queries. You have access to a database of tutorial videos about a software library for building LLM-powered applications. Given a question, return a database query optimized to retrieve the most relevant results.\n\nIf there are acronyms or words you are not familiar with, do not try to rephrase them.'
-    prompt_1 = ChatPromptTemplate.from_messages([('system', system_1), ('human', '{question}')])
-    llm_1 = make_chat_model()
-    structured_llm_1 = llm_1.with_structured_output(TutorialSearch)
-    query_analyzer = prompt_1 | structured_llm_1
+    query_system_prompt = 'You are an expert at converting user questions into database queries. You have access to a database of tutorial videos about a software library for building LLM-powered applications. Given a question, return a database query optimized to retrieve the most relevant results.\n\nIf there are acronyms or words you are not familiar with, do not try to rephrase them.'
+    query_prompt = ChatPromptTemplate.from_messages(
+        [("system", query_system_prompt), ("human", "{question}")]
+    )
+    structured_query_model = make_chat_model().with_structured_output(TutorialSearch)
+    query_analyzer = query_prompt | structured_query_model
     return (query_analyzer,)
 
 
@@ -375,7 +374,7 @@ def _(query_analyzer):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    To then connect this to various vectorstores, you can follow [here](https://python.langchain.com/docs/modules/data_connection/retrievers/self_query#constructing-from-scratch-with-lcel).
+    これを各種ベクトルストアへ接続する方法は、[こちら](https://python.langchain.com/docs/modules/data_connection/retrievers/self_query#constructing-from-scratch-with-lcel)を参照してください。
     """)
     return
 

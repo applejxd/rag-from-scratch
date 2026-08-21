@@ -5,6 +5,7 @@ app = marimo.App()
 
 with app.setup:
     import os
+    from operator import itemgetter
 
     import bs4
     import cohere
@@ -85,9 +86,9 @@ with app.setup:
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    # Rag From Scratch: Retrieval
+    # RAGをゼロから学ぶ：検索
 
-    ![Screenshot 2024-03-25 at 8.23.58 PM.png](./imgs/retrieval_overview.png)
+    ![検索の概要](./imgs/retrieval_overview.png)
     """)
     return
 
@@ -95,11 +96,11 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ## Part 15: Re-ranking
+    ## パート15：再ランキング
 
-    We showed this previously with RAG-fusion.
+    最初の検索では候補を広めに取得し、より精密なモデルで質問との関連度を再評価して上位だけを残します。RAG-Fusionが複数の検索順位を統合するのに対し、再ランキングは質問と各候補文書を直接比較します。
 
-    ![Screenshot 2024-03-25 at 2.59.21 PM.png](./imgs/re-ranking.png)
+    ![再ランキングの流れ](./imgs/re-ranking.png)
     """)
     return
 
@@ -109,7 +110,7 @@ def _():
     #### INDEXING ####
 
     # Load blog
-    loader = WebBaseLoader(
+    blog_loader = WebBaseLoader(
         web_paths=("https://lilianweng.github.io/posts/2023-06-23-agent/",),
         bs_kwargs={
             "parse_only": bs4.SoupStrainer(
@@ -117,7 +118,7 @@ def _():
             )
         },
     )
-    blog_docs = loader.load()
+    blog_documents = blog_loader.load()
 
     # Split
     text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
@@ -126,11 +127,11 @@ def _():
     )
 
     # Make splits
-    splits = text_splitter.split_documents(blog_docs)
+    document_chunks = text_splitter.split_documents(blog_documents)
 
     # Index
     vectorstore = Chroma.from_documents(
-        documents=splits,
+        documents=document_chunks,
         embedding=make_embeddings(),
     )
 
@@ -142,88 +143,107 @@ def _():
 @app.cell
 def _():
     # RAG-Fusion
-    template = """You are a helpful assistant that generates multiple search queries based on a single input query. \n
+    rag_fusion_template = """You are a helpful assistant that generates multiple search queries based on a single input query. \n
     Generate multiple search queries related to: {question} \n
     Output (4 queries):"""
-    prompt_rag_fusion = ChatPromptTemplate.from_template(template)
-    return (prompt_rag_fusion,)
+    rag_fusion_prompt = ChatPromptTemplate.from_template(rag_fusion_template)
+    return (rag_fusion_prompt,)
 
 
 @app.cell
-def _(prompt_rag_fusion):
-    generate_queries = (
-        prompt_rag_fusion
+def _(rag_fusion_prompt):
+    rag_fusion_query_generator = (
+        rag_fusion_prompt
         | make_chat_model()
         | StrOutputParser()
         | (lambda x: x.split("\n"))
     )
-    return (generate_queries,)
+    return (rag_fusion_query_generator,)
 
 
 @app.cell
-def _(generate_queries, retriever):
+def _(rag_fusion_query_generator, retriever):
     def reciprocal_rank_fusion(results: list[list], k=60):
-        """ Reciprocal_rank_fusion that takes multiple lists of ranked documents 
-            and an optional parameter k used in the RRF formula """
+        """Combine ranked result lists using reciprocal rank fusion."""
         fused_scores = {}
-        for docs in results:  # Initialize a dictionary to hold fused scores for each unique document
-            for rank, doc in enumerate(docs):
-                doc_str = dumps(doc)
-                if doc_str not in fused_scores:  # Iterate through each list of ranked documents
+        for documents in results:
+            for rank, document in enumerate(documents):
+                doc_str = dumps(document)
+                if doc_str not in fused_scores:
                     fused_scores[doc_str] = 0
-                fused_scores[doc_str] = fused_scores[doc_str] + 1 / (rank + k)
-        reranked_results = [(loads(doc), score) for doc, score in sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)]  # Convert the document to a string format to use as a key (assumes documents can be serialized to JSON)
-        return reranked_results
-    question = 'What is task decomposition for LLM agents?'  # If the document is not yet in the fused_scores dictionary, add it with an initial score of 0
-    retrieval_chain_rag_fusion = generate_queries | retriever.map() | reciprocal_rank_fusion
-    docs = retrieval_chain_rag_fusion.invoke({'question': question})
-    len(docs)  # Retrieve the current score of the document, if any  # Update the score of the document using the RRF formula: 1 / (rank + k)  # Sort the documents based on their fused scores in descending order to get the final reranked results  # Return the reranked results as a list of tuples, each containing the document and its fused score
-    return question, retrieval_chain_rag_fusion
+                fused_scores[doc_str] += 1 / (rank + k)
+        return [
+            (loads(doc), score)
+            for doc, score in sorted(
+                fused_scores.items(), key=lambda item: item[1], reverse=True
+            )
+        ]
+
+    reranking_question = "What is task decomposition for LLM agents?"
+    rag_fusion_retrieval_chain = (
+        rag_fusion_query_generator | retriever.map() | reciprocal_rank_fusion
+    )
+    fused_documents = rag_fusion_retrieval_chain.invoke(
+        {"question": reranking_question}
+    )
+    len(fused_documents)
+    return rag_fusion_retrieval_chain, reranking_question
 
 
 @app.cell
-def _(question, retrieval_chain_rag_fusion):
-    from operator import itemgetter
-    template_1 = 'Answer the following question based on this context:\n\n{context}\n\nQuestion: {question}\n'
-    # RAG
-    prompt = ChatPromptTemplate.from_template(template_1)
-    llm = make_chat_model()
-    final_rag_chain = {'context': retrieval_chain_rag_fusion, 'question': itemgetter('question')} | prompt | llm | StrOutputParser()
-    final_rag_chain.invoke({'question': question})
+def _(rag_fusion_retrieval_chain, reranking_question):
+    answer_template = 'Answer the following question based on this context:\n\n{context}\n\nQuestion: {question}\n'
+    answer_prompt = ChatPromptTemplate.from_template(answer_template)
+    rag_fusion_answer_chain = (
+        {
+            "context": rag_fusion_retrieval_chain,
+            "question": itemgetter("question"),
+        }
+        | answer_prompt
+        | make_chat_model()
+        | StrOutputParser()
+    )
+    rag_fusion_answer_chain.invoke({"question": reranking_question})
     return
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    We can also use [Cohere Re-Rank](https://python.langchain.com/docs/integrations/retrievers/cohere-reranker#doing-reranking-with-coherererank).
+    [Cohere Re-Rank](https://python.langchain.com/docs/integrations/retrievers/cohere-reranker#doing-reranking-with-coherererank)も利用できます。
 
-    See [here](https://txt.cohere.com/rerank/):
+    ここでは最初にベクトル検索で10件を取得し、Cohereで関連度を再計算して上位3件へ絞ります。実行には `COHERE_API_KEY` が必要で、関連度は各文書の `metadata["relevance_score"]` に保存されます。
 
-    ![data-src-image-387e0861-93de-4823-84e0-7ae04f2be893.png](./imgs/Cohere_Re-Rank.png)
+    詳細は[こちら](https://txt.cohere.com/rerank/)を参照してください。
+
+    ![Cohere Re-Rankの流れ](./imgs/Cohere_Re-Rank.png)
     """)
     return
 
 
 @app.cell
-def _(question, vectorstore):
-    retriever_1 = vectorstore.as_retriever(search_kwargs={'k': 10})
-    retrieved_docs = retriever_1.invoke(question)
-    compressed_docs = rerank_with_cohere(question, retrieved_docs, top_n=3)
-    compressed_docs
+def _(reranking_question, vectorstore):
+    candidate_retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
+    candidate_documents = candidate_retriever.invoke(reranking_question)
+    reranked_documents = rerank_with_cohere(
+        reranking_question, candidate_documents, top_n=3
+    )
+    reranked_documents
     return
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ## 16 - Retrieval (CRAG)
+    ## パート16：検索（CRAG）
 
-    `Deep Dive`
+    CRAGは検索結果を評価し、関連性が低い場合に検索クエリの書き換えやWeb検索で補正する手法です。このノートブックでは実装を実行せず、詳細解説と実装例へのリンクのみを示します。
+
+    `詳細解説`
 
     https://www.youtube.com/watch?v=E2shqsYwxck
 
-    `Notebooks`
+    `ノートブック`
 
     https://github.com/langchain-ai/langgraph/blob/main/examples/rag/langgraph_crag.ipynb
 
@@ -235,13 +255,11 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    # Generation
+    ## パート17：自己評価を伴う生成（Self-RAG）
 
+    Self-RAGは、モデルが検索の要否、取得文書の関連性、回答の根拠性を自己評価しながら生成する手法です。このノートブックでは実装を実行せず、LangGraphによる実装例を参照します。
 
-
-    ## 17 - Retrieval (Self-RAG)
-
-    `Notebooks`
+    `ノートブック`
 
     https://github.com/langchain-ai/langgraph/tree/main/examples/rag
 
@@ -253,13 +271,15 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ## 18 - Impact of long context
+    ## パート18：長いコンテキストの影響
 
-    `Deep dive`
+    入力できるコンテキストが長くても、必要な情報の位置によって利用精度が下がる「Lost in the Middle」が起こり得ます。長い文書をすべて渡す方法と、検索で関連箇所を絞る方法は、精度・遅延・コストを含めて選択します。このノートブックでは参考動画とスライドのみを示します。
+
+    `詳細解説`
 
     https://www.youtube.com/watch?v=SsHUNfhF32s
 
-    `Slides`
+    `スライド`
 
     https://docs.google.com/presentation/d/1mJUiPBdtf58NfuSEQ7pVSEQ2Oqmek7F1i4gBwR6JDss/edit#slide=id.g26c0cb8dc66_0_0
     """)

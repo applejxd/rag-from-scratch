@@ -73,15 +73,15 @@ with app.setup:
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    # Rag From Scratch: Indexing
+    # RAGをゼロから学ぶ：インデックス作成
 
-    ![Screenshot 2024-03-25 at 8.23.02 PM.png](./imgs/indexing_overview.png)
+    ![インデックス作成の概要](./imgs/indexing_overview.png)
 
-    ## Preface: Chunking
+    ## はじめに：チャンキング
 
-    We don't explicitly cover document chunking / splitting.
+    このノートブックでは、ドキュメントのチャンキング／分割そのものは詳しく扱いません。
 
-    For an excellent review of document chunking, see this video from Greg Kamradt:
+    ドキュメントのチャンキングを詳しく学ぶには、Greg Kamradtによる次の動画がおすすめです。
 
     https://www.youtube.com/watch?v=8OJC21T2SL4
     """)
@@ -91,19 +91,21 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ## Part 12: Multi-representation Indexing
+    ## パート12：複数表現によるインデックス作成
 
-    Flow:
+    検索に適した短い要約をベクトル化し、ヒットした要約から情報量の多い元文書を返します。検索用表現と回答用文書を分けることで、検索精度と回答に必要な文脈量を両立します。
 
-     ![Screenshot 2024-03-16 at 5.54.55 PM.png](./imgs/multi-representation_indexing.png)
+    処理の流れ：
 
-    Docs:
+     ![複数表現によるインデックス作成の流れ](./imgs/multi-representation_indexing.png)
+
+    ドキュメント：
 
     https://blog.langchain.dev/semi-structured-multi-modal-rag/
 
     https://python.langchain.com/docs/modules/data_connection/retrievers/multi_vector
 
-    Paper:
+    論文：
 
     https://arxiv.org/abs/2312.06648
     """)
@@ -112,69 +114,91 @@ def _():
 
 @app.cell
 def _():
-    loader = WebBaseLoader("https://lilianweng.github.io/posts/2023-06-23-agent/")
-    docs = loader.load()
+    agent_article_loader = WebBaseLoader(
+        "https://lilianweng.github.io/posts/2023-06-23-agent/"
+    )
+    source_documents = agent_article_loader.load()
 
-    loader = WebBaseLoader("https://lilianweng.github.io/posts/2024-02-05-human-data-quality/")
-    docs.extend(loader.load())
-    return (docs,)
+    data_quality_loader = WebBaseLoader(
+        "https://lilianweng.github.io/posts/2024-02-05-human-data-quality/"
+    )
+    source_documents.extend(data_quality_loader.load())
+    return (source_documents,)
 
 
 @app.cell
-def _(docs):
-    chain = (
+def _(source_documents):
+    summarization_chain = (
         {"doc": lambda x: x.page_content}
         | ChatPromptTemplate.from_template("Summarize the following document:\n\n{doc}")
         | make_chat_model()
         | StrOutputParser()
     )
 
-    summaries = chain.batch(docs, {"max_concurrency": 5})
-    return (summaries,)
+    document_summaries = summarization_chain.batch(
+        source_documents, {"max_concurrency": 5}
+    )
+    return (document_summaries,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### 要約と元文書の対応付け
+
+    各要約には元文書と共通の `doc_id` を付けます。検索対象は要約ですが、ヒット後は `doc_id` を使って元文書を返すため、回答生成では省略前の内容を利用できます。
+    """)
+    return
 
 
 @app.cell
-def _(docs, summaries):
-    # The vectorstore to use to index the child chunks
-    vectorstore = Chroma(collection_name="summaries",
-                         embedding_function=make_embeddings())
+def _(document_summaries, source_documents):
+    summary_vectorstore = Chroma(
+        collection_name="summaries",
+        embedding_function=make_embeddings(),
+    )
 
     id_key = "doc_id"
 
-    retriever = SimpleMultiVectorRetriever(vectorstore=vectorstore, id_key=id_key)
-    doc_ids = [str(uuid.uuid4()) for _ in docs]
+    multi_vector_retriever = SimpleMultiVectorRetriever(
+        vectorstore=summary_vectorstore, id_key=id_key
+    )
+    source_document_ids = [str(uuid.uuid4()) for _ in source_documents]
 
-    # Docs linked to summaries
-    summary_docs = [
-        Document(page_content=s, metadata={id_key: doc_ids[i]})
-        for i, s in enumerate(summaries)
+    summary_documents = [
+        Document(
+            page_content=summary,
+            metadata={id_key: source_document_ids[index]},
+        )
+        for index, summary in enumerate(document_summaries)
     ]
 
-    # Add
-    vectorstore.add_documents(summary_docs)
-    retriever.set_parent_documents(zip(doc_ids, docs))
-    return retriever, vectorstore
+    summary_vectorstore.add_documents(summary_documents)
+    multi_vector_retriever.set_parent_documents(
+        zip(source_document_ids, source_documents)
+    )
+    return multi_vector_retriever, summary_vectorstore
 
 
 @app.cell
-def _(vectorstore):
+def _(summary_vectorstore):
     summary_query = "Memory in agents"
-    sub_docs = vectorstore.similarity_search(summary_query, k=1)
-    sub_docs[0]
+    matching_summaries = summary_vectorstore.similarity_search(summary_query, k=1)
+    matching_summaries[0]
     return (summary_query,)
 
 
 @app.cell
-def _(retriever, summary_query):
-    retrieved_docs = retriever.invoke(summary_query)
-    retrieved_docs[0].page_content[0:500]
+def _(multi_vector_retriever, summary_query):
+    retrieved_parent_documents = multi_vector_retriever.invoke(summary_query)
+    retrieved_parent_documents[0].page_content[0:500]
     return
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    Related idea is the [parent document retriever](https://python.langchain.com/docs/modules/data_connection/retrievers/parent_document_retriever).
+    `SimpleMultiVectorRetriever` は、要約に付与した `doc_id` から元文書を復元します。関連する標準的な実装として、[親ドキュメントリトリーバー](https://python.langchain.com/docs/modules/data_connection/retrievers/parent_document_retriever)があります。
     """)
     return
 
@@ -182,21 +206,23 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ## Part 13: RAPTOR
+    ## パート13：RAPTOR
 
-    Flow:
+    RAPTORは文書を階層的にクラスタリング・要約し、細部のチャンクと上位の要約を同じ検索対象にする手法です。このノートブックでは実装を実行せず、概念図と参考資料のみを示します。
 
-    ![Screenshot 2024-03-16 at 6.16.21 PM.png](./imgs/RAPTOR.png)
+    処理の流れ：
 
-    Deep dive video:
+    ![RAPTORの流れ](./imgs/RAPTOR.png)
+
+    詳細解説動画：
 
     https://www.youtube.com/watch?v=jbGchdTL7d0
 
-    Paper:
+    論文：
 
     https://arxiv.org/pdf/2401.18059.pdf
 
-    Full code:
+    完全なコード：
 
     https://github.com/langchain-ai/langchain/blob/master/cookbook/RAPTOR.ipynb
     """)
@@ -206,17 +232,11 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ## Part 14: ColBERT
+    ## パート14：ColBERT
 
-    PyLate provides a ColBERT-oriented retrieval stack.
+    通常の密ベクトル検索が文書全体を一つのベクトルに圧縮するのに対し、ColBERTはクエリと文書の各トークンを別々のベクトルとして保持します。クエリの各トークンについて文書側との最大類似度を求め、その合計で文書を順位付けする「Late Interaction」が特徴です。
 
-    ColBERT generates a contextually influenced vector for each token in the passages.
-
-    ColBERT similarly generates vectors for each token in the query.
-
-    Then, the score of each document is the sum of the maximum similarity of each query embedding to any of the document embeddings:
-
-    In this section, we will use PyLate's `ColBERT`, `PLAID`, and retrieval APIs directly.
+    元ノートのRAGatouilleによる例は、現在の実装ではPyLateを直接使う形へ置き換えています。`ColBERT` で埋め込みを生成し、`PLAID` インデックスへ保存して検索します。初回実行時はモデルのダウンロードとローカルインデックスの作成が必要です。
     """)
     return
 
@@ -225,8 +245,10 @@ def _():
 def _():
     from pylate import indexes, models, retrieve
 
-    model_name = os.environ.get("PYLATE_MODEL", "lightonai/GTE-ModernColBERT-v1")
-    return indexes, model_name, models, retrieve
+    colbert_model_name = os.environ.get(
+        "PYLATE_MODEL", "lightonai/GTE-ModernColBERT-v1"
+    )
+    return colbert_model_name, indexes, models, retrieve
 
 
 @app.cell
@@ -262,12 +284,12 @@ def _():
         page = next(iter(data["query"]["pages"].values()))
         return page.get("extract")
 
-    full_document = get_wikipedia_page("Hayao_Miyazaki")
-    return (full_document,)
+    miyazaki_article = get_wikipedia_page("Hayao_Miyazaki")
+    return (miyazaki_article,)
 
 
 @app.cell
-def _(full_document):
+def _(miyazaki_article):
     def chunk_text(text: str, chunk_size: int = 900, overlap: int = 150):
         chunks = []
         start = 0
@@ -281,49 +303,53 @@ def _(full_document):
             start = max(end - overlap, start + 1)
         return chunks
 
-    documents = chunk_text(full_document)
-    document_ids = [f"miyazaki-{i}" for i in range(len(documents))]
-    documents_by_id = dict(zip(document_ids, documents))
-    return document_ids, documents, documents_by_id
+    colbert_passages = chunk_text(miyazaki_article)
+    colbert_passage_ids = [
+        f"miyazaki-{index}" for index in range(len(colbert_passages))
+    ]
+    passages_by_id = dict(zip(colbert_passage_ids, colbert_passages))
+    return colbert_passage_ids, colbert_passages, passages_by_id
 
 
 @app.cell
-def _(document_ids, documents, indexes, model_name, models):
-    model = models.ColBERT(model_name_or_path=model_name)
-    document_embeddings = model.encode(documents, is_query=False)
-    index = indexes.PLAID(
+def _(colbert_model_name, colbert_passage_ids, colbert_passages, indexes, models):
+    colbert_model = models.ColBERT(model_name_or_path=colbert_model_name)
+    passage_embeddings = colbert_model.encode(colbert_passages, is_query=False)
+    colbert_index = indexes.PLAID(
         index_folder=".pylate-indexes",
         index_name="miyazaki-colbert",
         override=True,
     )
-    index.add_documents(
-        documents_ids=document_ids,
-        documents_embeddings=document_embeddings,
+    colbert_index.add_documents(
+        documents_ids=colbert_passage_ids,
+        documents_embeddings=passage_embeddings,
     )
-    return index, model
+    return colbert_index, colbert_model
 
 
 @app.cell
-def _(index, model, retrieve):
-    retriever_1 = retrieve.ColBERT(index=index)
+def _(colbert_index, colbert_model, retrieve):
+    colbert_retriever = retrieve.ColBERT(index=colbert_index)
     colbert_query = "What animation studio did Miyazaki found?"
-    query_embeddings = model.encode([colbert_query], is_query=True)
-    results = retriever_1.retrieve(queries_embeddings=query_embeddings, k=3)
-    results
-    return (results,)
+    query_embeddings = colbert_model.encode([colbert_query], is_query=True)
+    colbert_results = colbert_retriever.retrieve(
+        queries_embeddings=query_embeddings, k=3
+    )
+    colbert_results
+    return (colbert_results,)
 
 
 @app.cell
-def _(documents_by_id, results):
-    retrieved_chunks = [
+def _(colbert_results, passages_by_id):
+    retrieved_passages = [
         {
             "id": result["id"],
             "score": result["score"],
-            "text": documents_by_id[result["id"]],
+            "text": passages_by_id[result["id"]],
         }
-        for result in results[0]
+        for result in colbert_results[0]
     ]
-    retrieved_chunks
+    retrieved_passages
     return
 
 

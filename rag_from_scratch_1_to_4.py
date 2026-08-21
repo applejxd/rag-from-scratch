@@ -61,13 +61,13 @@ with app.setup:
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Rag From Scratch: Overview
+    # RAGをゼロから学ぶ：概要
 
-    These notebooks walk through the process of building RAG app(s) from scratch.
+    このノートブックでは、RAGアプリケーションをゼロから構築する流れを学びます。
 
-    They will build towards a broader understanding of the RAG langscape, as shown here:
+    以下の図に示すRAGの全体像を、段階的に理解していきます。
 
-    ![Screenshot 2024-03-25 at 8.30.33 PM.png](./imgs/overview.png)
+    ![RAGの全体像](./imgs/overview.png)
     """)
     return
 
@@ -75,9 +75,11 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Part 1: Overview
+    ## パート1：概要
 
-    [RAG quickstart](https://python.langchain.com/docs/use_cases/question_answering/quickstart)
+    RAGは、質問に関連する文書を検索し、その内容をコンテキストとしてLLMへ渡す構成です。ここでは、文書の読み込み・分割・埋め込み・検索・回答生成という最小構成を一つのセルで確認します。
+
+    [RAGクイックスタート](https://python.langchain.com/docs/use_cases/question_answering/quickstart)
     """)
     return
 
@@ -86,7 +88,7 @@ def _(mo):
 def _():
     #### INDEXING ####
     # Load Documents
-    loader = WebBaseLoader(
+    _loader = WebBaseLoader(
         web_paths=("https://lilianweng.github.io/posts/2023-06-23-agent/",),
         bs_kwargs={
             "parse_only": bs4.SoupStrainer(
@@ -94,44 +96,50 @@ def _():
             )
         },
     )
-    docs = loader.load()
+    _documents = _loader.load()
 
     # Split
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    splits = text_splitter.split_documents(docs)
+    _text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000, chunk_overlap=200
+    )
+    _document_chunks = _text_splitter.split_documents(_documents)
 
     # Embed
-    vectorstore = Chroma.from_documents(documents=splits, embedding=make_embeddings())
+    _vectorstore = Chroma.from_documents(
+        documents=_document_chunks, embedding=make_embeddings()
+    )
 
-    retriever = vectorstore.as_retriever()
+    _retriever = _vectorstore.as_retriever()
 
     #### RETRIEVAL and GENERATION ####
 
     # Prompt
-    prompt = load_rag_prompt()
+    _prompt = load_rag_prompt()
 
     # LLM
-    llm = make_chat_model()
+    _chat_model = make_chat_model()
 
     # Chain
-    rag_chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
-        | prompt
-        | llm
+    _rag_chain = (
+        {"context": _retriever | format_docs, "question": RunnablePassthrough()}
+        | _prompt
+        | _chat_model
         | StrOutputParser()
     )
 
     # Question
-    rag_chain.invoke("What is Task Decomposition?")
+    _rag_chain.invoke("What is Task Decomposition?")
     return
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Part 2: Indexing
+    ## パート2：インデックス作成
 
-    ![Screenshot 2024-02-12 at 1.36.56 PM.png](./imgs/indexing.png)
+    検索対象の文書を小さなチャンクに分割し、各チャンクを埋め込みベクトルへ変換してベクトルストアへ保存します。以降のセルでは、この3段階を個別に確認します。
+
+    ![インデックス作成の流れ](./imgs/indexing.png)
     """)
     return
 
@@ -147,7 +155,9 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    [Count tokens](https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb) considering [~4 char / token](https://help.openai.com/en/articles/4936856-what-are-tokens-and-how-to-count-them)
+    ### トークン
+
+    モデルの入力上限やチャンクサイズは文字数ではなくトークン数で決まります。[トークン数を数える例](https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb)では、英語の場合は[1トークン約4文字](https://help.openai.com/en/articles/4936856-what-are-tokens-and-how-to-count-them)が大まかな目安です。
     """)
     return
 
@@ -167,38 +177,40 @@ def _(question):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    [Text embedding models](https://python.langchain.com/docs/integrations/text_embedding/openai)
+    ### 埋め込み
+
+    [テキスト埋め込みモデル](https://python.langchain.com/docs/integrations/text_embedding/openai)は、文書と質問を意味を反映した数値ベクトルへ変換します。同じ次元のベクトル同士を比較することで、語句が完全一致しない場合でも意味の近い文書を探せます。
     """)
     return
 
 
 @app.cell
 def _(document, question):
-    embd = make_embeddings()
+    embedding_model = make_embeddings()
 
-    query_result = embd.embed_query(question)
-    document_result = embd.embed_query(document)
-    len(query_result)
-    return document_result, query_result
+    query_embedding = embedding_model.embed_query(question)
+    document_embedding = embedding_model.embed_query(document)
+    len(query_embedding)
+    return document_embedding, query_embedding
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    [Cosine similarity](https://platform.openai.com/docs/guides/embeddings/frequently-asked-questions) is recommended (1 indicates identical) for OpenAI embeddings.
+    OpenAIの埋め込みでは[コサイン類似度](https://platform.openai.com/docs/guides/embeddings/frequently-asked-questions)が推奨されています。ベクトルの向きが近いほど値が1に近づき、意味的な類似度が高いと判断できます。
     """)
     return
 
 
 @app.cell
-def _(document_result, query_result):
+def _(document_embedding, query_embedding):
     def cosine_similarity(vec1, vec2):
         dot_product = np.dot(vec1, vec2)
         norm_vec1 = np.linalg.norm(vec1)
         norm_vec2 = np.linalg.norm(vec2)
         return dot_product / (norm_vec1 * norm_vec2)
 
-    similarity = cosine_similarity(query_result, document_result)
+    similarity = cosine_similarity(query_embedding, document_embedding)
     print("Cosine Similarity:", similarity)
     return
 
@@ -206,7 +218,9 @@ def _(document_result, query_result):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    [Document Loaders](https://python.langchain.com/docs/integrations/document_loaders/)
+    ### 読み込み
+
+    [ドキュメントローダー](https://python.langchain.com/docs/integrations/document_loaders/)は、Webページなどの外部データを、本文とメタデータを持つ共通の `Document` 形式へ変換します。
     """)
     return
 
@@ -214,7 +228,7 @@ def _(mo):
 @app.cell
 def _():
     #### INDEXING ####
-    loader_1 = WebBaseLoader(
+    blog_loader = WebBaseLoader(
         web_paths=("https://lilianweng.github.io/posts/2023-06-23-agent/",),
         bs_kwargs={
             "parse_only": bs4.SoupStrainer(
@@ -223,150 +237,168 @@ def _():
         },
     )
     # Load blog
-    blog_docs = loader_1.load()
-    return (blog_docs,)
+    blog_documents = blog_loader.load()
+    return (blog_documents,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    [Splitter](https://python.langchain.com/docs/modules/data_connection/document_transformers/recursive_text_splitter)
+    ### 分割
 
-    > This text splitter is the recommended one for generic text. It is parameterized by a list of characters. It tries to split on them in order until the chunks are small enough. The default list is ["\n\n", "\n", " ", "\"]. This has the effect of trying to keep all paragraphs (and then sentences, and then words) together as long as possible, as those would generically seem to be the strongest semantically related pieces of text.
+    [テキスト分割](https://python.langchain.com/docs/modules/data_connection/document_transformers/recursive_text_splitter)では、検索とモデル入力に適した大きさへ文書を分けます。
+
+    > このテキストスプリッターは、一般的なテキストに推奨されています。文字のリストを受け取り、チャンクが十分に小さくなるまで、その文字を順番に使って分割を試みます。デフォルトのリストは `['\n\n', '\n', ' ', '"']` です。これにより、意味的な関連が強いと考えられる段落、文、単語を、可能な限りまとめたまま分割できます。
     """)
     return
 
 
 @app.cell
-def _(blog_docs):
+def _(blog_documents):
     # Split
-    text_splitter_1 = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+    text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
         chunk_size=300, chunk_overlap=50
     )
     # Make splits
-    splits_1 = text_splitter_1.split_documents(blog_docs)
-    return (splits_1,)
+    document_chunks = text_splitter.split_documents(blog_documents)
+    return (document_chunks,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    [Vectorstores](https://python.langchain.com/docs/integrations/vectorstores/)
+    ### 保存
+
+    [ベクトルストア](https://python.langchain.com/docs/integrations/vectorstores/)は、埋め込みベクトルと元のチャンクを対応付けて保存し、質問に近いチャンクを検索できるようにします。
     """)
     return
 
 
 @app.cell
-def _(splits_1):
+def _(document_chunks):
     # Index
-    vectorstore_1 = Chroma.from_documents(
-        documents=splits_1, embedding=make_embeddings()
+    vectorstore = Chroma.from_documents(
+        documents=document_chunks, embedding=make_embeddings()
     )
-    retriever_1 = vectorstore_1.as_retriever()
-    return (retriever_1,)
+    return (vectorstore,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Part 3: Retrieval
+    ## パート3：検索
+
+    リトリーバーは質問を埋め込み、ベクトルストアから類似度の高いチャンクを返します。ここでは `k=1` とし、最も近い1件を取得して内容を確認します。
     """)
     return
 
 
 @app.cell
-def _(splits_1):
-    # Index
-    vectorstore_2 = Chroma.from_documents(
-        documents=splits_1, embedding=make_embeddings()
-    )
-    retriever_2 = vectorstore_2.as_retriever(search_kwargs={"k": 1})
-    return (retriever_2,)
+def _(vectorstore):
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 1})
+    return (retriever,)
 
 
 @app.cell
-def _(retriever_2):
-    docs_1 = retriever_2.invoke("What is Task Decomposition?")
-    return (docs_1,)
+def _(retriever):
+    retrieved_documents = retriever.invoke("What is Task Decomposition?")
+    return (retrieved_documents,)
 
 
 @app.cell
-def _(docs_1):
-    len(docs_1)
+def _(retrieved_documents):
+    len(retrieved_documents)
     return
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Part 4: Generation
+    ## パート4：生成
 
-    ![Screenshot 2024-02-12 at 1.37.38 PM.png](./imgs/generation.png)
+    検索したチャンクと質問をプロンプトへ埋め込み、チャットモデルで回答を生成します。まず各要素を手動で接続し、その後に検索から出力解析までを一つのRAGチェーンへまとめます。
+
+    ![回答生成の流れ](./imgs/generation.png)
     """)
     return
 
 
 @app.cell
 def _():
-    template = "Answer the question based only on the following context:\n{context}\n\nQuestion: {question}\n"
-    prompt_1 = ChatPromptTemplate.from_template(template)
+    generation_template = "Answer the question based only on the following context:\n{context}\n\nQuestion: {question}\n"
+    generation_prompt = ChatPromptTemplate.from_template(generation_template)
     # Prompt
-    prompt_1
-    return (prompt_1,)
+    generation_prompt
+    return (generation_prompt,)
 
 
 @app.cell
 def _():
     # LLM
-    llm_1 = make_chat_model()
-    return (llm_1,)
+    chat_model = make_chat_model()
+    return (chat_model,)
 
 
 @app.cell
-def _(llm_1, prompt_1):
+def _(chat_model, generation_prompt):
     # Chain
-    chain = prompt_1 | llm_1
-    return (chain,)
+    generation_chain = generation_prompt | chat_model
+    return (generation_chain,)
 
 
 @app.cell
-def _(chain, docs_1):
+def _(generation_chain, retrieved_documents):
     # Run
-    chain.invoke(
-        {"context": format_docs(docs_1), "question": "What is Task Decomposition?"}
+    generation_chain.invoke(
+        {
+            "context": format_docs(retrieved_documents),
+            "question": "What is Task Decomposition?",
+        }
     )
-    return
-
-
-@app.cell
-def _():
-    prompt_hub_rag = load_rag_prompt()
-    return (prompt_hub_rag,)
-
-
-@app.cell
-def _(prompt_hub_rag):
-    prompt_hub_rag
     return
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    [RAG chains](https://python.langchain.com/docs/expression_language/get_started#rag-search-example)
+    ### 再利用可能なRAGプロンプト
+
+    元ノートではLangChain Hubからプロンプトを取得していましたが、このリポジトリでは外部Hubへ依存せず再現できるよう、同じ役割のプロンプトを `load_rag_prompt()` でローカルに定義しています。
     """)
     return
 
 
 @app.cell
-def _(llm_1, prompt_1, retriever_2):
-    rag_chain_1 = (
-        {"context": retriever_2 | format_docs, "question": RunnablePassthrough()}
-        | prompt_1
-        | llm_1
+def _():
+    reusable_rag_prompt = load_rag_prompt()
+    return (reusable_rag_prompt,)
+
+
+@app.cell
+def _(reusable_rag_prompt):
+    reusable_rag_prompt
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 検索と生成の統合
+
+    [RAGチェーン](https://python.langchain.com/docs/expression_language/get_started#rag-search-example)では、質問をリトリーバーとプロンプトの両方へ渡します。検索結果は `format_docs` でコンテキストへ変換し、最後に `StrOutputParser` でモデルの応答から文字列だけを取り出します。
+    """)
+    return
+
+
+@app.cell
+def _(chat_model, reusable_rag_prompt, retriever):
+    rag_chain = (
+        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        | reusable_rag_prompt
+        | chat_model
         | StrOutputParser()
     )
-    rag_chain_1.invoke("What is Task Decomposition?")
+    rag_chain.invoke("What is Task Decomposition?")
     return
 
 
