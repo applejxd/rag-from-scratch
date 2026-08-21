@@ -81,3 +81,4 @@ mise exec -- uv run pre-commit run --all-files
 - [`docs/known-issues.md`](docs/known-issues.md)：marimoとtransformers/IPythonの相互作用など
 - [`docs/environment-notes.md`](docs/environment-notes.md)：GPU検出・herdr環境に関する注意点
 - [`docs/secrets-management.md`](docs/secrets-management.md)：SOPSの運用コマンドと注意点
+- [`docs/local-llm-consideration.md`](docs/local-llm-consideration.md)：OpenRouter依存をローカルLLMへ置き換える検討（未実装）
