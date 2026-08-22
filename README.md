@@ -107,4 +107,5 @@ mise exec -- uv run pre-commit run --all-files
 - [`docs/environment-notes.md`](docs/environment-notes.md)：GPU検出・herdr環境に関する注意点
 - [`docs/secrets-management.md`](docs/secrets-management.md)：SOPSの運用コマンドと注意点
 - [`docs/colbert-stack.md`](docs/colbert-stack.md)：パート14のColBERTスタックの選定記録
+- [`docs/observability.md`](docs/observability.md)：LangSmith相当を導入するかの検討記録
 - [`docs/local-llm-consideration.md`](docs/local-llm-consideration.md)：OpenRouter依存をローカルLLMへ置き換える検討（未実装）
