@@ -150,3 +150,47 @@ def split_queries(text: str) -> list[str]:
 
 `rag_from_scratch_5_to_9.py`（3箇所）と `rag_from_scratch_15_to_18.py`（1箇所）へ
 適用済み。新しくクエリ生成チェーンを追加する場合も同じヘルパーを使うこと。
+
+## セルを分割するときの marimo の変数ルール
+
+marimo はセルを関数として扱い、依存関係をDAGで解決する。セルを細かく分割する際は
+次の3点に注意する。
+
+### 1. 変数はノートブック全体で一意でなければならない
+
+同じ名前を複数のセルで代入すると `multiple-definitions` エラーになる。
+同じ処理を別のパートで繰り返す場合は、`overview_chunks` のように用途を表す
+接頭辞を付けて衝突を避ける。
+
+```shell
+# 衝突は静的検査で検出できる
+mise exec -- uv run marimo check --strict rag_from_scratch_*.py
+```
+
+### 2. `_` 接頭辞の変数はセルを跨げない
+
+アンダースコアで始まる変数はセルローカルであり、他のセルから参照できない。
+1つのセル内で完結していた `_loader` のような変数を持つセルを分割するときは、
+通常の名前へ変更して `return` する必要がある。
+
+### 3. セルの最後の式が出力として表示される
+
+中間値を見せたい場合は、代入だけで終わらせず最後に式を置く。
+`len(document_chunks)` のように件数を出すだけでも、処理の途中経過を追いやすくなる。
+`print()` を使うと複数行の文字列もそのまま確認できる。
+
+```python
+@app.cell
+def _(blog_documents):
+    text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        chunk_size=300, chunk_overlap=50
+    )
+    document_chunks = text_splitter.split_documents(blog_documents)
+    len(document_chunks)  # ← セルの出力として表示される
+    return (document_chunks,)
+```
+
+### クラス定義
+
+セル内で完結しないクラスは、`@app.class_definition` を付けてモジュール直下へ置く
+（`RouteQuery` と `TutorialSearch` がこの形式）。
