@@ -49,14 +49,21 @@ for i in "${!notebooks[@]}"; do
     if ! uv run marimo export html "$notebook" -o "$output" --force >"$log" 2>&1; then
         echo "    FAILED: marimo export returned a non-zero status" >&2
         sed 's/^/    /' "$log" >&2
+        # marimo may already have written a partial file; do not leave it behind.
+        rm -f "$output"
         failed=1
         continue
     fi
 
-    # `marimo export html` exits 0 even when cells raise, so inspect the log.
+    # `marimo export html` exits 0 even when cells raise, and it writes the
+    # output before we get a chance to look, so inspect the log and discard the
+    # file when anything failed. Transient outages of the sites the notebooks
+    # fetch (YouTube transcripts, Wikipedia) land here too; retrying usually
+    # clears them.
     if grep -q "some cells failed to execute" "$log"; then
         echo "    FAILED: some cells raised during execution" >&2
         grep -E "MarimoExceptionRaisedError|Error:" "$log" | sort -u | sed 's/^/    /' >&2
+        rm -f "$output"
         failed=1
         continue
     fi
@@ -65,7 +72,7 @@ for i in "${!notebooks[@]}"; do
 done
 
 if [[ $failed -ne 0 ]]; then
-    echo "Export failed. The generated HTML would contain error output." >&2
+    echo "Export failed; the affected HTML was discarded rather than published." >&2
     exit 1
 fi
 

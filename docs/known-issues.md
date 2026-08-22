@@ -194,3 +194,44 @@ def _(blog_documents):
 
 セル内で完結しないクラスは、`@app.class_definition` を付けてモジュール直下へ置く
 （`RouteQuery` と `TutorialSearch` がこの形式）。
+
+## PyLate と sentence-transformers v6 は共存できない
+
+### 症状
+
+`pylate` を入れたまま `sentence-transformers` を v6 へ上げようとすると、
+依存解決に失敗する。
+
+### 原因
+
+PyLate はどのバージョンも `sentence-transformers` を**完全一致で固定**する。
+
+| pylate | 固定先 |
+| --- | --- |
+| 1.4.0 | `sentence-transformers==5.1.1` |
+| 1.6.0 | `sentence-transformers==5.3.0` |
+
+一方 `sentence-transformers` 6.0.0 は `transformers>=5.0.0,<6.0.0` を要求する。
+PyLate 側は `transformers<=5.3.0` などの上限も持つため、両立しない。
+
+この固定は ColBERT を使わないパートにも影響する。パート15の `CrossEncoder` も
+同じ `sentence-transformers` を使うため、PyLate を入れている限りそちらも
+古いバージョンに縛られる。
+
+### 対処
+
+PyLate をやめ、`sentence-transformers` v6 の `MultiVectorEncoder` と
+`fast-plaid` を直接使う。PyLate は元から `fast-plaid` のラッパーだったため、
+インデックスの実装は変わらない。
+
+判断の経緯と実測値は `docs/colbert-stack.md` に記録している。
+
+### 確認方法
+
+```shell
+# 依存の固定先を確認する
+mise exec -- uv run python -c "
+import importlib.metadata as m
+print(m.requires('pylate'))
+"
+```
