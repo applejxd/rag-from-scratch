@@ -79,6 +79,12 @@ ColBERTモデルのダウンロードとPLAIDインデックスの構築も行�
 `.github/workflows/pages.yml` がGitHub Pagesへデプロイします。このワークフローは
 ノートブックを実行せず静的ファイルをアップロードするだけなので、CI側にAPIキーは不要です。
 
+初回のみ、リポジトリの Settings → Pages → Source を **GitHub Actions** にする必要があります。
+未設定のまま実行するとワークフローが
+`Get Pages site failed. Please verify that the repository has Pages enabled` で失敗します。
+ワークフローには `enablement: true` を指定しているため自動で有効化を試みますが、
+権限によっては失敗するため、その場合は上記を手動で設定してから再実行してください。
+
 ## 開発
 
 `uv sync` の後にGit hookをインストールしてください。
