@@ -60,6 +60,25 @@ mise exec -- uv run marimo edit rag_from_scratch_1_to_4.py
 
 元のJupyterノートブックは、移行時の参考資料として `old/` に保持しています。
 
+## 公開サイト
+
+実行済みノートブックを静的HTMLとして
+<https://applejxd.github.io/rag-from-scratch/> で公開しています。
+
+サイトを再生成するには次を実行します。
+
+```shell
+mise exec -- bash scripts/build-site.sh
+```
+
+このスクリプトは `marimo export html` で各ノートブックを**実際に実行**してから
+HTMLへ変換するため、OpenRouterへのAPI呼び出しが発生し課金されます。パート12〜14では
+ColBERTモデルのダウンロードとPLAIDインデックスの構築も行われます。
+
+生成物は `site/` へ出力され、`main` へpushすると
+`.github/workflows/pages.yml` がGitHub Pagesへデプロイします。このワークフローは
+ノートブックを実行せず静的ファイルをアップロードするだけなので、CI側にAPIキーは不要です。
+
 ## 開発
 
 `uv sync` の後にGit hookをインストールしてください。

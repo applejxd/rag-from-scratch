@@ -1,0 +1,50 @@
+name: Deploy site to GitHub Pages
+
+# The HTML under site/ is generated locally with scripts/build-site.sh, which
+# executes the notebooks and therefore needs API credentials. This workflow only
+# uploads the pre-built static files, so it needs no secrets and incurs no API
+# charges.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - site/**
+      - imgs/**
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment, without cancelling a run already in progress.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # site/imgs/ is gitignored, so restore it from the tracked imgs/ directory.
+      # The exported HTML references images through relative `imgs/...` paths.
+      - name: Copy images into the site
+        run: |
+          rm -rf site/imgs
+          cp -r imgs site/imgs
+
+      - uses: actions/configure-pages@v6.0.0
+
+      - uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v5.0.0

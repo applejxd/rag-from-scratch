@@ -140,7 +140,8 @@ venv.bak/
 .ropeproject
 
 # mkdocs documentation
-/site
+# `/site` from the upstream Python template is intentionally omitted:
+# this repository uses site/ for the GitHub Pages output, which is committed.
 
 # mypy
 .mypy_cache/
@@ -177,3 +178,7 @@ pyrightconfig.json
 
 .pylate-indexes/
 __marimo__/
+
+# Copied from imgs/ by scripts/build-site.sh and by the Pages workflow.
+# Kept out of git so the images are not committed twice.
+site/imgs/
