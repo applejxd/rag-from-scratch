@@ -16,8 +16,11 @@ with app.setup:
     from langchain_core.load import dumps, loads
     from langchain_core.output_parsers import StrOutputParser
     from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.retrievers import BaseRetriever
+    from langchain_core.runnables import RunnablePassthrough
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
     from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from pydantic import ConfigDict
     from sentence_transformers import CrossEncoder
 
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -52,6 +55,30 @@ with app.setup:
 
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
+
+    def load_rag_prompt():
+        """Local copy of the LangChain Hub prompt `rlm/rag-prompt`.
+
+        The original notebooks pulled this at runtime with
+        `hub.pull("rlm/rag-prompt")`. It is reproduced here so the notebook
+        does not depend on the Hub being reachable, and so the exact wording
+        is visible. See https://smith.langchain.com/hub/rlm/rag-prompt
+        """
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    (
+                        "You are an assistant for question-answering tasks. "
+                        "Use the following pieces of retrieved context to "
+                        "answer the question. If you don't know the answer, "
+                        "just say that you don't know. Use three sentences "
+                        "maximum and keep the answer concise."
+                    ),
+                ),
+                ("human", "Question: {question}\nContext: {context}\nAnswer:"),
+            ]
+        )
 
     def split_queries(text: str) -> list[str]:
         """Split generated queries into lines, dropping blank ones.
@@ -265,7 +292,7 @@ def _(reranking_question, vectorstore):
     candidate_retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
     candidate_documents = candidate_retriever.invoke(reranking_question)
     len(candidate_documents)
-    return (candidate_documents,)
+    return candidate_documents, candidate_retriever
 
 
 @app.cell(hide_code=True)
@@ -298,6 +325,92 @@ def _(reranked_documents):
     [
         round(doc.metadata["relevance_score"], 4) for doc in reranked_documents
     ]
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### 再ランキングをチェーンの部品にする
+
+    ここまでは候補の取得と再ランキングを手作業でつないでいました。
+    元ノートは、この2段構えを1つのリトリーバーにまとめていました。
+
+    ```python
+    compression_retriever = ContextualCompressionRetriever(
+        base_compressor=CohereRerank(), base_retriever=retriever
+    )
+    ```
+
+    ただし `ContextualCompressionRetriever` は **LangChain 1.x で削除**されており、
+    `langchain.retrievers` モジュール自体が存在しません。
+    現在は `BaseRetriever` を継承して同じ役割のクラスを自分で書きます。
+    実装するのは `_get_relevant_documents()` の1メソッドだけです。
+    """)
+    return
+
+
+@app.class_definition
+class RerankingRetriever(BaseRetriever):
+    """Retrieve with a base retriever, then rerank with a CrossEncoder.
+
+    Fills the role of `ContextualCompressionRetriever`, which was removed in
+    LangChain 1.x.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    base_retriever: BaseRetriever
+    top_n: int = 3
+
+    def _get_relevant_documents(self, query, *, run_manager=None):
+        candidates = self.base_retriever.invoke(query)
+        return rerank_with_cross_encoder(query, candidates, top_n=self.top_n)
+
+
+@app.cell
+def _(candidate_retriever):
+    reranking_retriever = RerankingRetriever(
+        base_retriever=candidate_retriever, top_n=3
+    )
+    return (reranking_retriever,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    1回の `invoke()` で「10件取得して3件へ絞る」までが完了します。
+    """)
+    return
+
+
+@app.cell
+def _(reranking_question, reranking_retriever):
+    reranking_retriever.invoke(reranking_question)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    リトリーバーになったので、RAGチェーンへそのまま差し込めます。
+    ベクトル検索のリトリーバーと差し替えるだけで、再ランキング付きの検索になります。
+    """)
+    return
+
+
+@app.cell
+def _(reranking_question, reranking_retriever):
+    reranking_rag_chain = (
+        {
+            "context": reranking_retriever | format_docs,
+            "question": RunnablePassthrough(),
+        }
+        | load_rag_prompt()
+        | make_chat_model()
+        | StrOutputParser()
+    )
+    reranking_rag_chain.invoke(reranking_question)
     return
 
 

@@ -15,8 +15,11 @@ with app.setup:
     from langchain_core.documents import Document
     from langchain_core.output_parsers import StrOutputParser
     from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.retrievers import BaseRetriever
+    from langchain_core.runnables import RunnablePassthrough
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
     from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from pydantic import ConfigDict
     from sentence_transformers import MultiVectorEncoder
 
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -32,6 +35,33 @@ with app.setup:
 
     def colbert_device():
         return "cuda" if torch.cuda.is_available() else "cpu"
+
+    def format_colbert_docs(docs):
+        return "\n\n".join(doc.page_content for doc in docs)
+
+    def load_rag_prompt():
+        """Local copy of the LangChain Hub prompt `rlm/rag-prompt`.
+
+        The original notebooks pulled this at runtime with
+        `hub.pull("rlm/rag-prompt")`. It is reproduced here so the notebook
+        does not depend on the Hub being reachable, and so the exact wording
+        is visible. See https://smith.langchain.com/hub/rlm/rag-prompt
+        """
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    (
+                        "You are an assistant for question-answering tasks. "
+                        "Use the following pieces of retrieved context to "
+                        "answer the question. If you don't know the answer, "
+                        "just say that you don't know. Use three sentences "
+                        "maximum and keep the answer concise."
+                    ),
+                ),
+                ("human", "Question: {question}\nContext: {context}\nAnswer:"),
+            ]
+        )
 
     def make_chat_model():
         return ChatOpenAI(
@@ -547,6 +577,106 @@ def _(colbert_passages, colbert_results):
         for position, score in colbert_results[0]
     ]
     retrieved_passages
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### LangChainのリトリーバーとして使う
+
+    ここまでは検索結果を `(位置, スコア)` のタプルとして直接扱ってきました。
+    ただしRAGチェーンへ差し込むには、LangChainが期待する
+    「クエリ文字列を受け取り `Document` のリストを返す」形にする必要があります。
+
+    元ノートは `RAG.as_langchain_retriever(k=3)` の一行でこれを行っていました。
+    RAGatouilleを使わない現在は、`BaseRetriever` を継承して同じ役割のクラスを作ります。
+    実装すべきは `_get_relevant_documents()` の1メソッドだけです。
+
+    `BaseRetriever` はPydanticモデルなので、モデルやインデックスのような
+    任意のオブジェクトを保持するには `arbitrary_types_allowed` が必要です。
+    """)
+    return
+
+
+@app.class_definition
+class ColBERTRetriever(BaseRetriever):
+    """Expose a fast-plaid ColBERT index as a LangChain retriever.
+
+    Equivalent to `RAG.as_langchain_retriever(k=...)` in the original
+    notebook, which relied on RAGatouille.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    encoder: MultiVectorEncoder
+    index: FastPlaid
+    passages: list[str]
+    k: int = 3
+
+    def _get_relevant_documents(self, query, *, run_manager=None):
+        query_embedding = self.encoder.encode_query(query)
+        results = self.index.search(
+            queries_embeddings=query_embedding.unsqueeze(0), top_k=self.k
+        )
+        return [
+            Document(
+                page_content=self.passages[position],
+                metadata={"position": position, "score": float(score)},
+            )
+            for position, score in results[0]
+        ]
+
+
+@app.cell
+def _(colbert_index, colbert_model, colbert_passages):
+    colbert_retriever = ColBERTRetriever(
+        encoder=colbert_model,
+        index=colbert_index,
+        passages=colbert_passages,
+        k=3,
+    )
+    return (colbert_retriever,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    これで他のリトリーバーと同じ `invoke()` で呼び出せます。戻り値が `Document` に
+    なったため、`format_docs` やLCELのパイプへそのまま渡せます。
+    """)
+    return
+
+
+@app.cell
+def _(colbert_query, colbert_retriever):
+    colbert_documents = colbert_retriever.invoke(colbert_query)
+    colbert_documents
+    return (colbert_documents,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    実際にRAGチェーンへ差し込み、ColBERTで検索した内容から回答を生成します。
+    ベクトル検索のリトリーバーと差し替えるだけで動く点が、
+    LangChainの部品として揃える利点です。
+    """)
+    return
+
+
+@app.cell
+def _(colbert_query, colbert_retriever):
+    colbert_rag_chain = (
+        {
+            "context": colbert_retriever | format_colbert_docs,
+            "question": RunnablePassthrough(),
+        }
+        | load_rag_prompt()
+        | make_chat_model()
+        | StrOutputParser()
+    )
+    colbert_rag_chain.invoke(colbert_query)
     return
 
 
