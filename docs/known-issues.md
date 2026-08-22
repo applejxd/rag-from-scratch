@@ -235,3 +235,42 @@ import importlib.metadata as m
 print(m.requires('pylate'))
 "
 ```
+
+## LangChain 1.x で削除されたAPI
+
+元ノート（LangChain 0.1 系）が使っていたAPIのうち、現行の 1.x で
+利用できなくなったもの。
+
+### `ContextualCompressionRetriever`
+
+```python
+# 元ノート。現在は動かない
+from langchain.retrievers import ContextualCompressionRetriever
+```
+
+`langchain.retrievers` モジュール自体が存在しない。
+`langchain_community.retrievers` / `langchain_classic` /
+`langchain_core.retrievers` のいずれにも移設されていないことを確認済み。
+
+**対処**：`BaseRetriever` を継承して自分で書く。実装が必要なのは
+`_get_relevant_documents()` の1メソッドだけ。
+`rag_from_scratch_15_to_18.py` の `RerankingRetriever` がその例。
+
+### `get_relevant_documents()`
+
+非推奨。`invoke()` を使う。本リポジトリでは移行済み。
+
+### 確認方法
+
+```shell
+mise exec -- uv run python -c "
+from langchain_core.retrievers import BaseRetriever
+print(BaseRetriever.__abstractmethods__)
+"
+```
+
+### 補足：`BaseRetriever` は Pydantic モデル
+
+モデルやインデックスのような任意のオブジェクトをフィールドに持つ場合は
+`model_config = ConfigDict(arbitrary_types_allowed=True)` が必要。
+素の dict で書くと Ruff の RUF012 に引っかかるため `ConfigDict` を使う。
