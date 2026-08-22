@@ -5,6 +5,11 @@ requires-python = "==3.12.*"
 dependencies = [
     "bs4>=0.0.2",
     "chromadb>=1.5.5",
+    # fast-plaid: the PLAID index used for ColBERT retrieval in part 14.
+    # PyLate used to wrap this same engine; we now call it directly so that
+    # sentence-transformers is not pinned to an exact version. Note that
+    # fast-plaid pins torch exactly.
+    "fast-plaid>=1.6.0",
     # ipython: not imported directly, but required so that `sentence-transformers`
     # (via `transformers`) can import cleanly under marimo. `transformers`
     # detects marimo as a notebook environment and unconditionally imports
@@ -18,8 +23,10 @@ dependencies = [
     "langchain-text-splitters>=1.1.1",
     "marimo[recommended]>=0.20.4",
     "numpy>=2.4.3",
-    "pylate>=1.4.0",
     "pytube>=15.0.0",
+    # sentence-transformers v6 provides both MultiVectorEncoder (ColBERT,
+    # part 14) and CrossEncoder (reranking, part 15).
+    "sentence-transformers>=6.0.0",
     "tiktoken>=0.12.0",
     "youtube-transcript-api>=1.2.4",
 ]

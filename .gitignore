@@ -176,7 +176,7 @@ pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python
 
-.pylate-indexes/
+.colbert-index/
 __marimo__/
 
 # Copied from imgs/ by scripts/build-site.sh and by the Pages workflow.

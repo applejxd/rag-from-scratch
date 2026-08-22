@@ -8,6 +8,8 @@ with app.setup:
     import uuid
 
     import marimo as mo
+    import torch
+    from fast_plaid.search import FastPlaid
     from langchain_chroma import Chroma
     from langchain_community.document_loaders import WebBaseLoader
     from langchain_core.documents import Document
@@ -15,8 +17,10 @@ with app.setup:
     from langchain_core.prompts import ChatPromptTemplate
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
     from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from sentence_transformers import MultiVectorEncoder
 
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+    COLBERT_INDEX_DIR = ".colbert-index"
     DEFAULT_CHAT_MODEL = os.environ.get("MODEL", "openai/gpt-5-nano")
     DEFAULT_EMBEDDING_MODEL = os.environ.get(
         "EMBEDDING_MODEL", "openai/text-embedding-3-small"
@@ -25,6 +29,9 @@ with app.setup:
     DEFAULT_EMBEDDING_TIKTOKEN_MODEL = os.environ.get(
         "TIKTOKEN_EMBEDDING_MODEL", "text-embedding-3-small"
     )
+
+    def colbert_device():
+        return "cuda" if torch.cuda.is_available() else "cpu"
 
     def make_chat_model():
         return ChatOpenAI(
@@ -301,23 +308,39 @@ def _():
     mo.md(r"""
     ## パート14：ColBERT
 
-    通常の密ベクトル検索が文書全体を一つのベクトルに圧縮するのに対し、ColBERTはクエリと文書の各トークンを別々のベクトルとして保持します。クエリの各トークンについて文書側との最大類似度を求め、その合計で文書を順位付けする「Late Interaction」が特徴です。
+    通常の密ベクトル検索が文書全体を一つのベクトルに圧縮するのに対し、ColBERTはクエリと文書の各トークンを別々のベクトルとして保持します。クエリの各トークンについて文書側との最大類似度（MaxSim）を求め、その合計で文書を順位付けする「Late Interaction」が特徴です。
 
-    元ノートのRAGatouilleによる例は、現在の実装ではPyLateを直接使う形へ置き換えています。`ColBERT` で埋め込みを生成し、`PLAID` インデックスへ保存して検索します。初回実行時はモデルのダウンロードとローカルインデックスの作成が必要です。
+    ### 使用ライブラリの変遷
 
-    また、使用モデルも元ノートの `colbert-ir/colbertv2.0` から `lightonai/GTE-ModernColBERT-v1` へ変更しています。ライブラリとモデルの両方が異なるため、検索結果を元ノートと直接比較することはできません。
+    このパートの実装は次の経緯で変わっています。
+
+    | 版 | エンコーダ | インデックス |
+    | --- | --- | --- |
+    | 元ノート | RAGatouille | RAGatouille |
+    | 旧版 | PyLate `models.ColBERT` | PyLate `indexes.PLAID` |
+    | 現在 | `sentence-transformers` の `MultiVectorEncoder` | `fast-plaid` の `FastPlaid` |
+
+    PyLateは内部で `fast-plaid` を使っていたため、インデックスの実装は旧版と同じです。
+    変更したのは、PyLateというラッパーを外して `fast-plaid` を直接呼ぶようにした点と、
+    エンコーダを `sentence-transformers` v6 の `MultiVectorEncoder` へ移した点です。
+    これによりトークン単位の埋め込みとMaxSimスコアを直接確認できるようになり、
+    パート15の `CrossEncoder` と同じライブラリに揃いました。
+    詳細は `docs/colbert-stack.md` を参照してください。
+
+    使用モデルは元ノートの `colbert-ir/colbertv2.0` ではなく
+    `lightonai/GTE-ModernColBERT-v1` です。ライブラリとモデルの両方が異なるため、
+    検索結果を元ノートと直接比較することはできません。
+    初回実行時はモデルのダウンロードとローカルインデックスの作成が必要です。
     """)
     return
 
 
 @app.cell
 def _():
-    from pylate import indexes, models, retrieve
-
     colbert_model_name = os.environ.get(
-        "PYLATE_MODEL", "lightonai/GTE-ModernColBERT-v1"
+        "COLBERT_MODEL", "lightonai/GTE-ModernColBERT-v1"
     )
-    return colbert_model_name, indexes, models, retrieve
+    return (colbert_model_name,)
 
 
 @app.cell(hide_code=True)
@@ -380,81 +403,139 @@ def _(miyazaki_article):
         chunk_size=900, chunk_overlap=150
     )
     colbert_passages = text_splitter.split_text(miyazaki_article)
-    colbert_passage_ids = [
-        f"miyazaki-{index}" for index in range(len(colbert_passages))
-    ]
-    passages_by_id = dict(zip(colbert_passage_ids, colbert_passages))
     len(colbert_passages)
-    return colbert_passage_ids, colbert_passages, passages_by_id
+    return (colbert_passages,)
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ColBERTモデルでパッセージを埋め込みます。通常の埋め込みが1文書あたり1ベクトルなのに対し、ColBERTは**トークンごとに1ベクトル**を作ります。形状を確認すると、1パッセージが複数のベクトルを持つことがわかります。
+    ColBERTモデルでパッセージを埋め込みます。通常の埋め込みが1文書あたり1ベクトルなのに対し、ColBERTは**トークンごとに1ベクトル**を作ります。`encode_document()` はパッセージごとに `(トークン数, 次元)` の行列を返すため、長さの違うパッセージは行数の違う行列になります。
     """)
     return
 
 
 @app.cell
-def _(colbert_model_name, colbert_passages, models):
-    colbert_model = models.ColBERT(model_name_or_path=colbert_model_name)
-    passage_embeddings = colbert_model.encode(colbert_passages, is_query=False)
-    passage_embeddings[0].shape
+def _(colbert_model_name, colbert_passages):
+    colbert_model = MultiVectorEncoder(colbert_model_name, device=colbert_device())
+    passage_embeddings = colbert_model.encode_document(colbert_passages)
+    [tuple(embedding.shape) for embedding in passage_embeddings[:5]]
     return colbert_model, passage_embeddings
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    トークン単位のベクトルをPLAIDインデックスへ登録します。PLAIDは量子化によりベクトル数の多さを実用的な容量へ抑えます。
+    質問側は `encode_query()` で埋め込みます。文書側と違い、モデルによってはクエリを固定長へ揃えるため、行数が一定になることがあります。
     """)
     return
 
 
 @app.cell
-def _(colbert_passage_ids, indexes, passage_embeddings):
-    colbert_index = indexes.PLAID(
-        index_folder=".pylate-indexes",
-        index_name="miyazaki-colbert",
-        override=True,
+def _(colbert_model):
+    colbert_query = "What animation studio did Miyazaki found?"
+    query_embedding = colbert_model.encode_query(colbert_query)
+    tuple(query_embedding.shape)
+    return colbert_query, query_embedding
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### MaxSimによる採点
+
+    `similarity()` がLate Interactionの採点そのものです。クエリの各トークンについて、文書側のどのトークンと最も似ているかを求め、その最大値をクエリトークン全体で合計します。パッセージ数が少ないうちは、この総当たり計算で十分です。
+    """)
+    return
+
+
+@app.cell
+def _(colbert_model, passage_embeddings, query_embedding):
+    exhaustive_scores = colbert_model.similarity(
+        query_embedding.unsqueeze(0), passage_embeddings
+    )[0]
+    exhaustive_top = exhaustive_scores.topk(3)
+    [
+        (int(i), round(float(s), 4))
+        for s, i in zip(exhaustive_top.values, exhaustive_top.indices)
+    ]
+    return (exhaustive_scores,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### PLAIDインデックス
+
+    パッセージ数が増えると総当たりでは追いつかなくなります。PLAIDは重心による枝刈りと量子化で、トークンごとのベクトルという多量のデータを実用的な容量と速度へ抑えます。`fast-plaid` はそのRust実装で、`encode_document()` が返したテンソルをそのまま受け取ります。
+    """)
+    return
+
+
+@app.cell
+def _(passage_embeddings):
+    colbert_index = FastPlaid(
+        index=COLBERT_INDEX_DIR, device=colbert_device()
     )
-    colbert_index.add_documents(
-        documents_ids=colbert_passage_ids,
-        documents_embeddings=passage_embeddings,
-    )
+    colbert_index.create(documents_embeddings=passage_embeddings)
     return (colbert_index,)
 
 
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    質問側もトークンごとに埋め込み、Late Interactionで上位3件を検索します。
+    検索結果は `(パッセージの位置, スコア)` の組で返ります。PLAIDは近似検索ですが、この規模では総当たりのMaxSimと同じ順位・スコアになることを次のセルで確認できます。
     """)
     return
 
 
 @app.cell
-def _(colbert_index, colbert_model, retrieve):
-    colbert_retriever = retrieve.ColBERT(index=colbert_index)
-    colbert_query = "What animation studio did Miyazaki found?"
-    query_embeddings = colbert_model.encode([colbert_query], is_query=True)
-    colbert_results = colbert_retriever.retrieve(
-        queries_embeddings=query_embeddings, k=3
+def _(colbert_index, query_embedding):
+    colbert_results = colbert_index.search(
+        queries_embeddings=query_embedding.unsqueeze(0), top_k=3
     )
-    colbert_results
+    colbert_results[0]
     return (colbert_results,)
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    総当たりとPLAIDのスコアを並べて比較します。この規模では一致しますが、コーパスが大きくなるとPLAIDの近似により差が出ることがあります。
+    """)
+    return
+
+
 @app.cell
-def _(colbert_results, passages_by_id):
+def _(colbert_results, exhaustive_scores):
+    [
+        {
+            "passage": position,
+            "plaid": round(float(score), 4),
+            "exhaustive": round(float(exhaustive_scores[position]), 4),
+        }
+        for position, score in colbert_results[0]
+    ]
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    位置からパッセージ本文を取り出します。
+    """)
+    return
+
+
+@app.cell
+def _(colbert_passages, colbert_results):
     retrieved_passages = [
         {
-            "id": result["id"],
-            "score": result["score"],
-            "text": passages_by_id[result["id"]],
+            "position": position,
+            "score": round(float(score), 4),
+            "text": colbert_passages[position],
         }
-        for result in colbert_results[0]
+        for position, score in colbert_results[0]
     ]
     retrieved_passages
     return
