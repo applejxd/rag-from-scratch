@@ -274,3 +274,43 @@ print(BaseRetriever.__abstractmethods__)
 モデルやインデックスのような任意のオブジェクトをフィールドに持つ場合は
 `model_config = ConfigDict(arbitrary_types_allowed=True)` が必要。
 素の dict で書くと Ruff の RUF012 に引っかかるため `ConfigDict` を使う。
+
+## エディタ上では出るが実際には問題ない診断
+
+### 症状
+
+VS Code などで marimo notebook を開くと、実際には存在しない警告・エラーが出る。
+
+| コード | 内容 | 件数の例 |
+| --- | --- | --- |
+| `F401` | `marimo` imported but unused | 25 |
+| `F821` / `unresolved-reference` | 未定義の名前 | 各14 |
+| `I001` | import が未整列 | 3 |
+
+CLI では同じファイルが問題なく通る。
+
+```shell
+mise exec -- uvx ruff@0.16.3 check rag_from_scratch_*.py   # All checks passed!
+mise exec -- uv run marimo check --strict rag_from_scratch_*.py  # 出力なし
+```
+
+### 原因
+
+エディタは marimo notebook を `vscode-notebook-cell://` スキームで扱い、
+**セルを1つずつ独立したファイルとして** linter へ渡す。
+
+marimo のセルは実際にはファイル全体で1つの名前空間を共有し、
+`with app.setup:` で定義した名前を各セルが参照する。
+セル単体で見ると、その import も定義も見えないため、
+「未使用の import」「未定義の名前」に見えてしまう。
+
+### 対処
+
+**エディタの表示ではなく CLI の結果を信頼する。** pre-commit も CLI を使う。
+
+```shell
+mise exec -- uv run pre-commit run --all-files
+```
+
+セルを跨いだ参照は marimo の正常な仕様であり、
+`marimo check --strict` が本当の依存関係を検証している。
