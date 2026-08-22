@@ -115,11 +115,17 @@ def _():
     return
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    パート15で使うインデックスを作成します。ブログ記事を読み込み、トークン基準で分割します。
+    """)
+    return
+
+
 @app.cell
 def _():
     #### INDEXING ####
-
-    # Load blog
     blog_loader = WebBaseLoader(
         web_paths=("https://lilianweng.github.io/posts/2023-06-23-agent/",),
         bs_kwargs={
@@ -130,22 +136,21 @@ def _():
     )
     blog_documents = blog_loader.load()
 
-    # Split
     text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
         chunk_size=300,
         chunk_overlap=50,
     )
-
-    # Make splits
     document_chunks = text_splitter.split_documents(blog_documents)
+    len(document_chunks)
+    return (document_chunks,)
 
-    # Index
+
+@app.cell
+def _(document_chunks):
     vectorstore = Chroma.from_documents(
         documents=document_chunks,
         embedding=make_embeddings(),
     )
-
-
     retriever = vectorstore.as_retriever()
     return retriever, vectorstore
 
@@ -172,6 +177,20 @@ def _(rag_fusion_prompt):
 
 
 @app.cell
+def _():
+    reranking_question = "What is task decomposition for LLM agents?"
+    return (reranking_question,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    比較のため、まずRAG-Fusion（順位の統合）で検索します。
+    """)
+    return
+
+
+@app.cell
 def _(rag_fusion_query_generator, retriever):
     def reciprocal_rank_fusion(results: list[list], k=60):
         """Combine ranked result lists using reciprocal rank fusion."""
@@ -189,15 +208,19 @@ def _(rag_fusion_query_generator, retriever):
             )
         ]
 
-    reranking_question = "What is task decomposition for LLM agents?"
     rag_fusion_retrieval_chain = (
         rag_fusion_query_generator | retriever.map() | reciprocal_rank_fusion
     )
+    return (rag_fusion_retrieval_chain,)
+
+
+@app.cell
+def _(rag_fusion_retrieval_chain, reranking_question):
     fused_documents = rag_fusion_retrieval_chain.invoke(
         {"question": reranking_question}
     )
     len(fused_documents)
-    return rag_fusion_retrieval_chain, reranking_question
+    return
 
 
 @app.cell
@@ -229,14 +252,52 @@ def _():
     return
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    まず候補を広めに10件取得します。この時点の順位はベクトル類似度によるものです。
+    """)
+    return
+
+
 @app.cell
 def _(reranking_question, vectorstore):
     candidate_retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
     candidate_documents = candidate_retriever.invoke(reranking_question)
+    len(candidate_documents)
+    return (candidate_documents,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    CrossEncoderで質問と各候補を直接比較し、上位3件へ絞ります。
+    """)
+    return
+
+
+@app.cell
+def _(candidate_documents, reranking_question):
     reranked_documents = rerank_with_cross_encoder(
         reranking_question, candidate_documents, top_n=3
     )
     reranked_documents
+    return (reranked_documents,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    再ランキング後の関連度スコアを確認します。値が大きいほど質問との関連が強いと判断されています。
+    """)
+    return
+
+
+@app.cell
+def _(reranked_documents):
+    [
+        round(doc.metadata["relevance_score"], 4) for doc in reranked_documents
+    ]
     return
 
 

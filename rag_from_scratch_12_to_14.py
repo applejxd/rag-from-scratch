@@ -124,7 +124,16 @@ def _():
         "https://lilianweng.github.io/posts/2024-02-05-human-data-quality/"
     )
     source_documents.extend(data_quality_loader.load())
+    len(source_documents)
     return (source_documents,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    各文書をLLMで要約します。`batch()` で並行実行するため、`max_concurrency` で同時リクエスト数を制限しています。
+    """)
+    return
 
 
 @app.cell
@@ -145,6 +154,23 @@ def _(source_documents):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
+    元文書と要約の文字数を比べます。検索対象を短い要約にすることで、埋め込みが記事全体の話題に薄められるのを防げます。
+    """)
+    return
+
+
+@app.cell
+def _(document_summaries, source_documents):
+    [
+        (len(doc.page_content), len(summary))
+        for doc, summary in zip(source_documents, document_summaries)
+    ]
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
     ### 要約と元文書の対応付け
 
     各要約には元文書と共通の `doc_id` を付けます。検索対象は要約ですが、ヒット後は `doc_id` を使って元文書を返すため、回答生成では省略前の内容を利用できます。
@@ -153,19 +179,22 @@ def _():
 
 
 @app.cell
-def _(document_summaries, source_documents):
-    summary_vectorstore = Chroma(
-        collection_name="summaries",
-        embedding_function=make_embeddings(),
-    )
-
+def _(source_documents):
     id_key = "doc_id"
-
-    multi_vector_retriever = SimpleMultiVectorRetriever(
-        vectorstore=summary_vectorstore, id_key=id_key
-    )
     source_document_ids = [str(uuid.uuid4()) for _ in source_documents]
+    return id_key, source_document_ids
 
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    要約を `Document` へ包み、メタデータへ対応する `doc_id` を持たせます。
+    """)
+    return
+
+
+@app.cell
+def _(document_summaries, id_key, source_document_ids):
     summary_documents = [
         Document(
             page_content=summary,
@@ -173,12 +202,41 @@ def _(document_summaries, source_documents):
         )
         for index, summary in enumerate(document_summaries)
     ]
+    summary_documents[0].metadata
+    return (summary_documents,)
 
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    要約をベクトルストアへ登録し、リトリーバーには `doc_id` から元文書を引くための対応表を渡します。
+    """)
+    return
+
+
+@app.cell
+def _(id_key, source_document_ids, source_documents, summary_documents):
+    summary_vectorstore = Chroma(
+        collection_name="summaries",
+        embedding_function=make_embeddings(),
+    )
     summary_vectorstore.add_documents(summary_documents)
+
+    multi_vector_retriever = SimpleMultiVectorRetriever(
+        vectorstore=summary_vectorstore, id_key=id_key
+    )
     multi_vector_retriever.set_parent_documents(
         zip(source_document_ids, source_documents)
     )
     return multi_vector_retriever, summary_vectorstore
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    まずベクトルストアを直接検索し、ヒットした「要約」を確認します。
+    """)
+    return
 
 
 @app.cell
@@ -187,6 +245,14 @@ def _(summary_vectorstore):
     matching_summaries = summary_vectorstore.similarity_search(summary_query, k=1)
     matching_summaries[0]
     return (summary_query,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    同じ質問をリトリーバー経由で検索すると、要約ではなく対応する「元文書」が返ります。
+    """)
+    return
 
 
 @app.cell
@@ -254,6 +320,14 @@ def _():
     return colbert_model_name, indexes, models, retrieve
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    検索対象として、宮崎駿のWikipedia記事を取得します。
+    """)
+    return
+
+
 @app.cell
 def _():
     import requests
@@ -288,7 +362,16 @@ def _():
         return page.get("extract")
 
     miyazaki_article = get_wikipedia_page("Hayao_Miyazaki")
+    len(miyazaki_article)
     return (miyazaki_article,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    記事をパッセージへ分割し、各パッセージへIDを振ります。IDは検索結果から本文へ戻すために使います。
+    """)
+    return
 
 
 @app.cell
@@ -301,13 +384,36 @@ def _(miyazaki_article):
         f"miyazaki-{index}" for index in range(len(colbert_passages))
     ]
     passages_by_id = dict(zip(colbert_passage_ids, colbert_passages))
+    len(colbert_passages)
     return colbert_passage_ids, colbert_passages, passages_by_id
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ColBERTモデルでパッセージを埋め込みます。通常の埋め込みが1文書あたり1ベクトルなのに対し、ColBERTは**トークンごとに1ベクトル**を作ります。形状を確認すると、1パッセージが複数のベクトルを持つことがわかります。
+    """)
+    return
+
+
 @app.cell
-def _(colbert_model_name, colbert_passage_ids, colbert_passages, indexes, models):
+def _(colbert_model_name, colbert_passages, models):
     colbert_model = models.ColBERT(model_name_or_path=colbert_model_name)
     passage_embeddings = colbert_model.encode(colbert_passages, is_query=False)
+    passage_embeddings[0].shape
+    return colbert_model, passage_embeddings
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    トークン単位のベクトルをPLAIDインデックスへ登録します。PLAIDは量子化によりベクトル数の多さを実用的な容量へ抑えます。
+    """)
+    return
+
+
+@app.cell
+def _(colbert_passage_ids, indexes, passage_embeddings):
     colbert_index = indexes.PLAID(
         index_folder=".pylate-indexes",
         index_name="miyazaki-colbert",
@@ -317,7 +423,15 @@ def _(colbert_model_name, colbert_passage_ids, colbert_passages, indexes, models
         documents_ids=colbert_passage_ids,
         documents_embeddings=passage_embeddings,
     )
-    return colbert_index, colbert_model
+    return (colbert_index,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    質問側もトークンごとに埋め込み、Late Interactionで上位3件を検索します。
+    """)
+    return
 
 
 @app.cell

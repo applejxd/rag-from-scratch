@@ -83,9 +83,19 @@ def _():
     mo.md(r"""
     ## パート1：概要
 
-    RAGは、質問に関連する文書を検索し、その内容をコンテキストとしてLLMへ渡す構成です。ここでは、文書の読み込み・分割・埋め込み・検索・回答生成という最小構成を一つのセルで確認します。
+    RAGは、質問に関連する文書を検索し、その内容をコンテキストとしてLLMへ渡す構成です。ここではまず全体の流れを、インデックス作成・チェーン構築・実行の3段階に分けて確認します。パート2以降で各段階を詳しく見ていきます。
 
     [RAGクイックスタート](https://python.langchain.com/docs/use_cases/question_answering/quickstart)
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### インデックス作成
+
+    Webページを読み込み、チャンクへ分割し、埋め込みベクトルとしてベクトルストアへ保存します。分割後のチャンク数を確認します。
     """)
     return
 
@@ -93,8 +103,7 @@ def _():
 @app.cell
 def _():
     #### INDEXING ####
-    # Load Documents
-    _loader = WebBaseLoader(
+    overview_loader = WebBaseLoader(
         web_paths=("https://lilianweng.github.io/posts/2023-06-23-agent/",),
         bs_kwargs={
             "parse_only": bs4.SoupStrainer(
@@ -102,39 +111,53 @@ def _():
             )
         },
     )
-    _documents = _loader.load()
+    overview_documents = overview_loader.load()
 
-    # Split
-    _text_splitter = RecursiveCharacterTextSplitter(
+    overview_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000, chunk_overlap=200
     )
-    _document_chunks = _text_splitter.split_documents(_documents)
+    overview_chunks = overview_splitter.split_documents(overview_documents)
+    len(overview_chunks)
+    return (overview_chunks,)
 
-    # Embed
-    _vectorstore = Chroma.from_documents(
-        documents=_document_chunks, embedding=make_embeddings()
+
+@app.cell
+def _(overview_chunks):
+    overview_vectorstore = Chroma.from_documents(
+        documents=overview_chunks, embedding=make_embeddings()
     )
+    overview_retriever = overview_vectorstore.as_retriever()
+    return (overview_retriever,)
 
-    _retriever = _vectorstore.as_retriever()
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ### チェーン構築と実行
+
+    検索・プロンプト・LLM・出力解析をLCELのパイプでつなぎます。`RunnablePassthrough()` は入力の質問をそのまま `question` へ渡す役割です。
+    """)
+    return
+
+
+@app.cell
+def _(overview_retriever):
     #### RETRIEVAL and GENERATION ####
-
-    # Prompt
-    _prompt = load_rag_prompt()
-
-    # LLM
-    _chat_model = make_chat_model()
-
-    # Chain
-    _rag_chain = (
-        {"context": _retriever | format_docs, "question": RunnablePassthrough()}
-        | _prompt
-        | _chat_model
+    overview_chain = (
+        {
+            "context": overview_retriever | format_docs,
+            "question": RunnablePassthrough(),
+        }
+        | load_rag_prompt()
+        | make_chat_model()
         | StrOutputParser()
     )
+    return (overview_chain,)
 
-    # Question
-    _rag_chain.invoke("What is Task Decomposition?")
+
+@app.cell
+def _(overview_chain):
+    overview_chain.invoke("What is Task Decomposition?")
     return
 
 
@@ -244,6 +267,7 @@ def _():
     )
     # Load blog
     blog_documents = blog_loader.load()
+    blog_documents[0].metadata
     return (blog_documents,)
 
 
@@ -261,12 +285,11 @@ def _():
 
 @app.cell
 def _(blog_documents):
-    # Split
     text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
         chunk_size=300, chunk_overlap=50
     )
-    # Make splits
     document_chunks = text_splitter.split_documents(blog_documents)
+    len(document_chunks)
     return (document_chunks,)
 
 
@@ -314,6 +337,20 @@ def _(retriever):
 @app.cell
 def _(retrieved_documents):
     len(retrieved_documents)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    取得したチャンクの中身を確認します。質問と語句が一致していなくても、意味的に近い箇所が返っていることがわかります。
+    """)
+    return
+
+
+@app.cell
+def _(retrieved_documents):
+    retrieved_documents[0].page_content
     return
 
 

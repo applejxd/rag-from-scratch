@@ -107,11 +107,17 @@ def _():
     return
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    まずブログ記事を読み込みます。パート5〜9はすべてこのインデックスを共有します。
+    """)
+    return
+
+
 @app.cell
 def _():
     #### INDEXING ####
-
-    # Load blog
     blog_loader = WebBaseLoader(
         web_paths=("https://lilianweng.github.io/posts/2023-06-23-agent/",),
         bs_kwargs={
@@ -121,20 +127,41 @@ def _():
         },
     )
     blog_documents = blog_loader.load()
+    len(blog_documents[0].page_content)
+    return (blog_documents,)
 
-    # Split
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    トークン基準で300トークンごと、50トークンの重なりを持たせて分割します。分割後のチャンク数を確認します。
+    """)
+    return
+
+
+@app.cell
+def _(blog_documents):
     text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
         chunk_size=300, chunk_overlap=50
     )
-
-    # Make splits
     document_chunks = text_splitter.split_documents(blog_documents)
+    len(document_chunks)
+    return (document_chunks,)
 
-    # Index
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    チャンクを埋め込みへ変換してベクトルストアへ保存し、リトリーバーを作成します。
+    """)
+    return
+
+
+@app.cell
+def _(document_chunks):
     vectorstore = Chroma.from_documents(
         documents=document_chunks, embedding=make_embeddings()
     )
-
     retriever = vectorstore.as_retriever()
     return (retriever,)
 
@@ -169,6 +196,37 @@ def _():
 
 
 @app.cell
+def _():
+    retrieval_question = "What is task decomposition for LLM agents?"
+    return (retrieval_question,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    実際に生成されたクエリを確認します。元の質問が異なる言い回しへ展開されていることがわかります。
+    """)
+    return
+
+
+@app.cell
+def _(multi_query_generator, retrieval_question):
+    generated_multi_queries = multi_query_generator.invoke(
+        {"question": retrieval_question}
+    )
+    generated_multi_queries
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    各クエリで検索した結果を統合します。クエリ間で同じ文書が重複して取得されるため、`get_unique_union` でシリアライズした文字列を使って重複を除きます。
+    """)
+    return
+
+
+@app.cell
 def _(multi_query_generator, retriever):
     def get_unique_union(documents: list[list]):
         """Return unique documents from multiple retrieval result lists."""
@@ -176,15 +234,27 @@ def _(multi_query_generator, retriever):
         unique_docs = list(set(flattened_docs))
         return [loads(doc) for doc in unique_docs]
 
-    retrieval_question = "What is task decomposition for LLM agents?"
     multi_query_retrieval_chain = (
         multi_query_generator | retriever.map() | get_unique_union
     )
+    return (multi_query_retrieval_chain,)
+
+
+@app.cell
+def _(multi_query_retrieval_chain, retrieval_question):
     multi_query_documents = multi_query_retrieval_chain.invoke(
         {"question": retrieval_question}
     )
     len(multi_query_documents)
-    return multi_query_retrieval_chain, retrieval_question
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    統合した文書をコンテキストとして最終的な回答を生成します。
+    """)
+    return
 
 
 @app.cell
@@ -246,8 +316,16 @@ def _(rag_fusion_prompt):
     return (rag_fusion_query_generator,)
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    Reciprocal Rank Fusion（RRF）は、各検索結果での順位 `rank` だけを使い、`1 / (rank + k)` を文書ごとに合計します。検索システムごとにスケールが異なる生スコアを比較せずに済むのが利点です。定数 `k`（ここでは60）は上位の順位差が過度に強調されるのを抑えます。
+    """)
+    return
+
+
 @app.cell
-def _(rag_fusion_query_generator, retrieval_question, retriever):
+def _(rag_fusion_query_generator, retriever):
     def reciprocal_rank_fusion(results: list[list], k=60):
         """Combine ranked result lists using reciprocal rank fusion."""
         fused_scores = {}
@@ -267,11 +345,38 @@ def _(rag_fusion_query_generator, retrieval_question, retriever):
     rag_fusion_retrieval_chain = (
         rag_fusion_query_generator | retriever.map() | reciprocal_rank_fusion
     )
+    return (rag_fusion_retrieval_chain,)
+
+
+@app.cell
+def _(rag_fusion_retrieval_chain, retrieval_question):
     fused_documents = rag_fusion_retrieval_chain.invoke(
         {"question": retrieval_question}
     )
     len(fused_documents)
-    return (rag_fusion_retrieval_chain,)
+    return (fused_documents,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    上位の融合スコアを確認します。複数のクエリで繰り返し上位に現れた文書ほど高い値になります。
+    """)
+    return
+
+
+@app.cell
+def _(fused_documents):
+    [round(score, 4) for _, score in fused_documents[:5]]
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    融合・再順位付けした文書をコンテキストとして回答を生成します。
+    """)
+    return
 
 
 @app.cell
@@ -325,19 +430,32 @@ def _(subquestion_prompt):
         | StrOutputParser()
         | split_queries
     )
-    decomposition_question = (
-        "What are the main components of an LLM-powered autonomous agent system?"
-    )
-    subquestions = subquestion_generator.invoke(
-        {"question": decomposition_question}
-    )
-    return decomposition_question, subquestion_generator, subquestions
+    return (subquestion_generator,)
 
 
 @app.cell
-def _(subquestions):
-    subquestions
+def _():
+    decomposition_question = (
+        "What are the main components of an LLM-powered autonomous agent system?"
+    )
+    return (decomposition_question,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    生成されたサブ質問を確認します。元の質問が、単独で検索・回答できる粒度へ分割されます。
+    """)
     return
+
+
+@app.cell
+def _(decomposition_question, subquestion_generator):
+    subquestions = subquestion_generator.invoke(
+        {"question": decomposition_question}
+    )
+    subquestions
+    return (subquestions,)
 
 
 @app.cell(hide_code=True)
@@ -366,15 +484,17 @@ def _():
     return (recursive_answer_prompt,)
 
 
-@app.cell
-def _(recursive_answer_prompt, retriever, subquestions):
-    def format_qa_pair(question, answer):
-        """Format Q and A pair"""
-        return f"Question: {question}\nAnswer: {answer}".strip()
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    サブ質問に答えるチェーンを組み立てます。`q_a_pairs` に、それまでに得た質問と回答の組を渡す点が通常のRAGチェーンとの違いです。
+    """)
+    return
 
+
+@app.cell
+def _(recursive_answer_prompt, retriever):
     decomposition_model = make_chat_model()
-    accumulated_qa = ""
-    recursive_answer = ""
     recursive_rag_chain = (
         {
             "context": itemgetter("question") | retriever | format_docs,
@@ -385,6 +505,25 @@ def _(recursive_answer_prompt, retriever, subquestions):
         | decomposition_model
         | StrOutputParser()
     )
+    return decomposition_model, recursive_rag_chain
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    サブ質問を順に処理し、回答を `accumulated_qa` へ積み上げます。各回答が次の質問の背景として渡るため、処理は直列になります。
+    """)
+    return
+
+
+@app.cell
+def _(recursive_rag_chain, subquestions):
+    def format_qa_pair(question, answer):
+        """Format Q and A pair"""
+        return f"Question: {question}\nAnswer: {answer}".strip()
+
+    accumulated_qa = ""
+    recursive_answer = ""
     for subquestion in subquestions:
         recursive_answer = recursive_rag_chain.invoke(
             {"question": subquestion, "q_a_pairs": accumulated_qa}
@@ -392,7 +531,21 @@ def _(recursive_answer_prompt, retriever, subquestions):
         accumulated_qa += (
             "\n---\n" + format_qa_pair(subquestion, recursive_answer)
         )
-    return decomposition_model, recursive_answer
+    return accumulated_qa, recursive_answer
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    積み上がった質問と回答の組を確認します。これが後続のサブ質問へ背景として渡されていました。
+    """)
+    return
+
+
+@app.cell
+def _(accumulated_qa):
+    print(accumulated_qa)
+    return
 
 
 @app.cell
@@ -448,16 +601,20 @@ def _(decomposition_model, decomposition_question, retriever, subquestion_genera
     individual_answers, individual_subquestions = (
         retrieve_and_answer_subquestions(decomposition_question)
     )
+    len(individual_answers)
     return individual_answers, individual_subquestions
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    サブ質問と回答を1つのコンテキストへ整形します。再帰的な方式と違い、各回答は互いに独立して得られたものです。
+    """)
+    return
+
+
 @app.cell
-def _(
-    decomposition_model,
-    decomposition_question,
-    individual_answers,
-    individual_subquestions,
-):
+def _(individual_answers, individual_subquestions):
     def format_qa_pairs(questions, answers):
         """Format Q and A pairs"""
         formatted_string = ""
@@ -468,6 +625,25 @@ def _(
         return formatted_string.strip()
 
     qa_context = format_qa_pairs(individual_subquestions, individual_answers)
+    return (qa_context,)
+
+
+@app.cell
+def _(qa_context):
+    print(qa_context)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    整形したコンテキストをもとに、元の質問への回答を合成します。
+    """)
+    return
+
+
+@app.cell
+def _(decomposition_model, decomposition_question, qa_context):
     synthesis_template = 'Here is a set of Q+A pairs:\n\n{context}\n\nUse these to synthesize an answer to the question: {question}\n'
     synthesis_prompt = ChatPromptTemplate.from_template(synthesis_template)
     synthesis_chain = synthesis_prompt | decomposition_model | StrOutputParser()
@@ -534,14 +710,48 @@ def _():
     return (step_back_prompt,)
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    Few-shot例で「一歩引いた質問」への言い換え方をLLMへ示します。
+    """)
+    return
+
+
 @app.cell
 def _(step_back_prompt):
     step_back_query_generator = (
         step_back_prompt | make_chat_model() | StrOutputParser()
     )
+    return (step_back_query_generator,)
+
+
+@app.cell
+def _():
     step_back_question = "What is task decomposition for LLM agents?"
+    return (step_back_question,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    実際に生成された一歩引いた質問を確認します。元の質問より一般的な問いへ言い換えられます。
+    """)
+    return
+
+
+@app.cell
+def _(step_back_query_generator, step_back_question):
     step_back_query_generator.invoke({"question": step_back_question})
-    return step_back_query_generator, step_back_question
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    元の質問と一歩引いた質問の両方で検索し、`normal_context` と `step_back_context` の2系統をプロンプトへ渡します。
+    """)
+    return
 
 
 @app.cell
@@ -593,9 +803,27 @@ def _():
     hypothetical_document_generator = (
         hyde_prompt | make_chat_model() | StrOutputParser()
     )
+    return (hypothetical_document_generator,)
+
+
+@app.cell
+def _():
     hyde_question = "What is task decomposition for LLM agents?"
+    return (hyde_question,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    生成された仮想文書を確認します。質問そのものではなく、論文の一節のような文章が生成されます。この文章の埋め込みを検索クエリとして使います。
+    """)
+    return
+
+
+@app.cell
+def _(hyde_question, hypothetical_document_generator):
     hypothetical_document_generator.invoke({"question": hyde_question})
-    return hypothetical_document_generator, hyde_question
+    return
 
 
 @app.cell

@@ -80,22 +80,49 @@ def _():
     return
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    まず行き先を表すデータモデルを定義します。`Literal` で候補を3つに限定しているため、LLMはこの範囲でしか値を返せません。
+    """)
+    return
+
+
+@app.class_definition
+class RouteQuery(BaseModel):
+    """Route a user query to the most relevant datasource."""
+
+    datasource: Literal["python_docs", "js_docs", "golang_docs"] = Field(
+        ...,
+        description="Given a user question choose which datasource would be most relevant for answering their question",
+    )
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    `with_structured_output()` でモデルの出力を `RouteQuery` に束縛します。
+    """)
+    return
+
+
 @app.cell
 def _():
-    # Data model
-    class RouteQuery(BaseModel):
-        """Route a user query to the most relevant datasource."""
-
-        datasource: Literal["python_docs", "js_docs", "golang_docs"] = Field(
-            ...,
-            description="Given a user question choose which datasource would be most relevant for answering their question",
-        )
-
-    # LLM with function call 
     llm = make_chat_model()
     structured_llm = llm.with_structured_output(RouteQuery)
+    return (structured_llm,)
 
-    # Prompt 
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    分類の基準をシステムプロンプトで指示し、プロンプトと構造化出力モデルをつないでルーターを作ります。
+    """)
+    return
+
+
+@app.cell
+def _(structured_llm):
     system = """You are an expert at routing a user question to the appropriate data source.
 
     Based on the programming language the question is referring to, route it to the relevant data source."""
@@ -107,7 +134,6 @@ def _():
         ]
     )
 
-    # Define router 
     router = prompt | structured_llm
     return (router,)
 
@@ -205,15 +231,59 @@ def _():
     return
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    行き先となる2つのプロンプトを用意し、あらかじめ埋め込みへ変換しておきます。
+    """)
+    return
+
+
 @app.cell
 def _():
     physics_template = "You are a very smart physics professor. You are great at answering questions about physics in a concise and easy to understand manner. When you don't know the answer to a question you admit that you don't know.\n\nHere is a question:\n{query}"
-    # Two prompts
     math_template = 'You are a very good mathematician. You are great at answering math questions. You are so good because you are able to break down hard problems into their component parts, answer the component parts, and then put them together to answer the broader question.\n\nHere is a question:\n{query}'
-    embeddings = make_embeddings()
     prompt_templates = [physics_template, math_template]
-    prompt_embeddings = embeddings.embed_documents(prompt_templates)
+    return math_template, prompt_templates
 
+
+@app.cell
+def _(prompt_templates):
+    embeddings = make_embeddings()
+    prompt_embeddings = embeddings.embed_documents(prompt_templates)
+    len(prompt_embeddings)
+    return embeddings, prompt_embeddings
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    質問の埋め込みと各プロンプトの埋め込みのコサイン類似度を計算し、値を確認します。左が物理、右が数学のプロンプトに対する類似度です。
+    """)
+    return
+
+
+@app.cell
+def _(embeddings, prompt_embeddings):
+    example_query = "What's a black hole"
+    example_similarities = [
+        round(cosine_similarity(embeddings.embed_query(example_query), pe), 4)
+        for pe in prompt_embeddings
+    ]
+    example_similarities
+    return (example_query,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    最も類似度が高いプロンプトを選ぶ関数を `RunnableLambda` でチェーンへ組み込みます。実行すると、選ばれたプロンプトが標準出力に表示されます。
+    """)
+    return
+
+
+@app.cell
+def _(embeddings, math_template, prompt_embeddings, prompt_templates):
     def prompt_router(inputs):
         query_embedding = embeddings.embed_query(inputs["query"])
         similarities = [
@@ -230,7 +300,12 @@ def _():
         | make_chat_model()
         | StrOutputParser()
     )
-    print(semantic_routing_chain.invoke("What's a black hole"))
+    return (semantic_routing_chain,)
+
+
+@app.cell
+def _(example_query, semantic_routing_chain):
+    print(semantic_routing_chain.invoke(example_query))
     return
 
 
