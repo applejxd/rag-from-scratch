@@ -8,6 +8,7 @@ with app.setup:
     import os
 
     import bs4
+    import marimo as mo
     import numpy as np
     import tiktoken
     from langchain_chroma import Chroma
@@ -64,7 +65,7 @@ with app.setup:
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _():
     mo.md(r"""
     # RAGをゼロから学ぶ：概要
 
@@ -78,7 +79,7 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _():
     mo.md(r"""
     ## パート1：概要
 
@@ -138,7 +139,7 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _():
     mo.md(r"""
     ## パート2：インデックス作成
 
@@ -158,7 +159,7 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _():
     mo.md(r"""
     ### トークン
 
@@ -180,7 +181,7 @@ def _(question):
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _():
     mo.md(r"""
     ### 埋め込み
 
@@ -200,7 +201,7 @@ def _(document, question):
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _():
     mo.md(r"""
     OpenAIの埋め込みでは[コサイン類似度](https://platform.openai.com/docs/guides/embeddings/frequently-asked-questions)が推奨されています。ベクトルの向きが近いほど値が1に近づき、意味的な類似度が高いと判断できます。
     """)
@@ -221,7 +222,7 @@ def _(document_embedding, query_embedding):
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _():
     mo.md(r"""
     ### 読み込み
 
@@ -247,7 +248,7 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _():
     mo.md(r"""
     ### 分割
 
@@ -270,7 +271,7 @@ def _(blog_documents):
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _():
     mo.md(r"""
     ### 保存
 
@@ -289,7 +290,7 @@ def _(document_chunks):
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _():
     mo.md(r"""
     ## パート3：検索
 
@@ -317,7 +318,7 @@ def _(retrieved_documents):
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _():
     mo.md(r"""
     ## パート4：生成
 
@@ -364,7 +365,7 @@ def _(generation_chain, retrieved_documents):
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _():
     mo.md(r"""
     ### 再利用可能なRAGプロンプト
 
@@ -386,7 +387,7 @@ def _(reusable_rag_prompt):
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _():
     mo.md(r"""
     ### 検索と生成の統合
 

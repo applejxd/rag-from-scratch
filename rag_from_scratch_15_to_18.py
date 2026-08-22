@@ -53,6 +53,15 @@ with app.setup:
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
+    def split_queries(text: str) -> list[str]:
+        """Split generated queries into lines, dropping blank ones.
+
+        The model often separates queries with blank lines. Without this
+        filtering the empty strings reach the embedding API, which rejects
+        them with HTTP 400 (`expected string to have >=1 characters`).
+        """
+        return [line.strip() for line in text.split("\n") if line.strip()]
+
     def rerank_with_cross_encoder(question: str, docs, top_n: int = 3):
         if not docs:
             return []
@@ -157,7 +166,7 @@ def _(rag_fusion_prompt):
         rag_fusion_prompt
         | make_chat_model()
         | StrOutputParser()
-        | (lambda x: x.split("\n"))
+        | split_queries
     )
     return (rag_fusion_query_generator,)
 

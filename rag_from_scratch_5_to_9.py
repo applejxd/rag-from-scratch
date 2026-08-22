@@ -53,6 +53,15 @@ with app.setup:
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
+    def split_queries(text: str) -> list[str]:
+        """Split generated queries into lines, dropping blank ones.
+
+        The model often separates queries with blank lines. Without this
+        filtering the empty strings reach the embedding API, which rejects
+        them with HTTP 400 (`expected string to have >=1 characters`).
+        """
+        return [line.strip() for line in text.split("\n") if line.strip()]
+
     def load_rag_prompt():
         """Local equivalent of the LangChain Hub prompt `rlm/rag-prompt`.
 
@@ -154,7 +163,7 @@ def _():
         multi_query_prompt
         | make_chat_model()
         | StrOutputParser()
-        | (lambda x: x.split("\n"))
+        | split_queries
     )
     return (multi_query_generator,)
 
@@ -232,7 +241,7 @@ def _(rag_fusion_prompt):
         rag_fusion_prompt
         | make_chat_model()
         | StrOutputParser()
-        | (lambda x: x.split("\n"))
+        | split_queries
     )
     return (rag_fusion_query_generator,)
 
@@ -314,7 +323,7 @@ def _(subquestion_prompt):
         subquestion_prompt
         | make_chat_model()
         | StrOutputParser()
-        | (lambda x: x.split("\n"))
+        | split_queries
     )
     decomposition_question = (
         "What are the main components of an LLM-powered autonomous agent system?"
