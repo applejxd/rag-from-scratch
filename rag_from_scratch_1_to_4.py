@@ -16,6 +16,7 @@ with app.setup:
     from langchain_core.output_parsers import StrOutputParser
     from langchain_core.prompts import ChatPromptTemplate
     from langchain_core.runnables import RunnablePassthrough
+    from langchain_core.tracers import ConsoleCallbackHandler
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -52,16 +53,28 @@ with app.setup:
         return "\n\n".join(doc.page_content for doc in docs)
 
     def load_rag_prompt():
-        """Local equivalent of the LangChain Hub prompt `rlm/rag-prompt`.
+        """Local copy of the LangChain Hub prompt `rlm/rag-prompt`.
 
-        See https://smith.langchain.com/hub/rlm/rag-prompt for the source
-        prompt this template reproduces without depending on the Hub.
+        The original notebooks pulled this at runtime with
+        `hub.pull("rlm/rag-prompt")`. It is reproduced here so the notebook
+        does not depend on the Hub being reachable, and so the exact wording
+        is visible. See https://smith.langchain.com/hub/rlm/rag-prompt
         """
-        template = (
-            "Answer the question based only on the following context:\n"
-            "{context}\n\nQuestion: {question}\n"
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    (
+                        "You are an assistant for question-answering tasks. "
+                        "Use the following pieces of retrieved context to "
+                        "answer the question. If you don't know the answer, "
+                        "just say that you don't know. Use three sentences "
+                        "maximum and keep the answer concise."
+                    ),
+                ),
+                ("human", "Question: {question}\nContext: {context}\nAnswer:"),
+            ]
         )
-        return ChatPromptTemplate.from_template(template)
 
 
 @app.cell(hide_code=True)
@@ -406,7 +419,9 @@ def _():
     mo.md(r"""
     ### 再利用可能なRAGプロンプト
 
-    元ノートではLangChain Hubからプロンプトを取得していましたが、このリポジトリでは外部Hubへ依存せず再現できるよう、同じ役割のプロンプトを `load_rag_prompt()` でローカルに定義しています。
+    元ノートは `hub.pull("rlm/rag-prompt")` でLangChain Hubから取得していました。このリポジトリでは外部Hubへ依存せず、かつ文面が読めるように、同じ内容を `load_rag_prompt()` としてローカルへ写しています。
+
+    このプロンプトは、直前のパート4で手書きしたものより指示が具体的です。system側で「文脈から分からなければ分からないと答える」「3文以内で簡潔に」と制約しており、回答の長さや断り方が変わります。
     """)
     return
 
@@ -442,6 +457,31 @@ def _(chat_model, reusable_rag_prompt, retriever):
         | StrOutputParser()
     )
     rag_chain.invoke("What is Task Decomposition?")
+    return (rag_chain,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### チェーンの中身を確認する
+
+    元ノートはLangSmithでチェーンの実行内容を追跡していました。このリポジトリでは
+    外部サービスを使わず、LangChain標準の `ConsoleCallbackHandler` で
+    実際に送られたプロンプトと応答をその場で確認します。
+
+    下のセルの出力に、テンプレートへ検索結果が埋め込まれた**実際の文面**が現れます。
+    チェーン全体を常に詳細表示したい場合は `set_debug(True)` も使えます。
+    採用理由と、Langfuse等を導入する場合の検討は `docs/observability.md` にあります。
+    """)
+    return
+
+
+@app.cell
+def _(rag_chain):
+    rag_chain.invoke(
+        "What is Task Decomposition?",
+        config={"callbacks": [ConsoleCallbackHandler()]},
+    )
     return
 
 

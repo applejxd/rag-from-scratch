@@ -392,15 +392,24 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    記事をパッセージへ分割し、各パッセージへIDを振ります。IDは検索結果から本文へ戻すために使います。
+    記事をパッセージへ分割します。元ノートは RAGatouille に
+    `max_document_length=180, split_documents=True` を渡して内部で分割させていました。
+    ここでは同じ粒度になるよう、トークン基準で180トークン・重なりなしで分割します。
+
+    ColBERTはパッセージごとにトークン単位のベクトルを持つため、
+    パッセージを短く保つとインデックスの肥大を抑えられます。
+    なお `GTE-ModernColBERT-v1` は最大299トークンまでしか受け付けず、
+    それを超える分は切り捨てられます。
     """)
     return
 
 
 @app.cell
 def _(miyazaki_article):
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=900, chunk_overlap=150
+    # Matches the original notebook's RAGatouille setting
+    # (max_document_length=180, split_documents=True).
+    text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        chunk_size=180, chunk_overlap=0
     )
     colbert_passages = text_splitter.split_text(miyazaki_article)
     len(colbert_passages)

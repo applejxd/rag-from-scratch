@@ -106,3 +106,23 @@ peak GPU memory   : 687.7 MiB
 元ノートは `colbert-ir/colbertv2.0` を使っていたが、本リポジトリは
 `lightonai/GTE-ModernColBERT-v1` を使う（環境変数 `COLBERT_MODEL` で変更可能）。
 ライブラリとモデルの両方が異なるため、検索結果を元ノートと直接比較することはできない。
+
+## チャンク分割の揃え方
+
+元ノートは RAGatouille に分割を任せていた。
+
+```python
+RAG.index(collection=[full_document], max_document_length=180, split_documents=True)
+```
+
+現在は同じ粒度になるよう、明示的にトークン基準で分割している。
+
+```python
+RecursiveCharacterTextSplitter.from_tiktoken_encoder(chunk_size=180, chunk_overlap=0)
+```
+
+一時期 `chunk_size=900, chunk_overlap=150`（文字基準）にしていたが、
+元より粒度が粗く重なりも入っていたため、180トークン・重なりなしへ戻した。
+
+厳密には tiktoken と ColBERT のトークナイザは異なるため近似である。
+また `GTE-ModernColBERT-v1` は最大299トークンで、それを超える入力は切り捨てられる。

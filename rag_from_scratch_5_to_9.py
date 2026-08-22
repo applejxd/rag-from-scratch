@@ -63,16 +63,28 @@ with app.setup:
         return [line.strip() for line in text.split("\n") if line.strip()]
 
     def load_rag_prompt():
-        """Local equivalent of the LangChain Hub prompt `rlm/rag-prompt`.
+        """Local copy of the LangChain Hub prompt `rlm/rag-prompt`.
 
-        See https://smith.langchain.com/hub/rlm/rag-prompt for the source
-        prompt this template reproduces without depending on the Hub.
+        The original notebooks pulled this at runtime with
+        `hub.pull("rlm/rag-prompt")`. It is reproduced here so the notebook
+        does not depend on the Hub being reachable, and so the exact wording
+        is visible. See https://smith.langchain.com/hub/rlm/rag-prompt
         """
-        template = (
-            "Answer the question based only on the following context:\n"
-            "{context}\n\nQuestion: {question}\n"
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    (
+                        "You are an assistant for question-answering tasks. "
+                        "Use the following pieces of retrieved context to "
+                        "answer the question. If you don't know the answer, "
+                        "just say that you don't know. Use three sentences "
+                        "maximum and keep the answer concise."
+                    ),
+                ),
+                ("human", "Question: {question}\nContext: {context}\nAnswer:"),
+            ]
         )
-        return ChatPromptTemplate.from_template(template)
 
 
 @app.cell(hide_code=True)
