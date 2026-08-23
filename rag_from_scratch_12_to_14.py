@@ -129,6 +129,30 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
+    ## このノートブックの共通部品
+
+    冒頭の `with app.setup` ブロック（marimo上では折りたたまれています）で、以下の共通部品を定義しています。パート12では要約を使う複数表現の検索、パート14ではColBERTの検索を実装するため、通常のRAG用ヘルパーに加えてColBERT用の整形関数や自作リトリーバーも用意しています。
+
+    - `make_chat_model()`：回答生成用のチャットモデル。OpenRouter経由で `openai/gpt-5-nano`（環境変数 `MODEL` で変更可）を呼びます。出力を安定させるため `temperature=0` を指定し、このノートでは失敗をすぐ確認できるよう `max_retries=0` にしています。
+    - `make_embeddings()`：埋め込みモデル。既定は `openai/text-embedding-3-small` です。OpenRouterはOpenAI互換ですがトークナイザ情報を返さないため、クライアント側のトークン数チェックを無効化（`check_embedding_ctx_length=False` / `tiktoken_enabled=False`）しています。
+    - `load_rag_prompt()`：LangChain Hubの `rlm/rag-prompt` と同じ内容のプロンプト。元ノートは実行時に `hub.pull()` で取得していましたが、外部サービスへの依存を避け、かつ文面をその場で読めるようローカルへ写しています。
+    - `format_colbert_docs(docs)`：`Document` のリストを、本文を空行2つでつないだ1つの文字列へ変換します。ColBERT検索結果をプロンプトの `{context}` へ埋め込むために使います。
+    - `colbert_device()`：CUDAが使える環境では `cuda`、使えない場合は `cpu` を返します。ColBERTモデルとPLAIDインデックスの実行デバイス指定に使います。
+    - `COLBERT_INDEX_DIR = ".colbert-index"`：パート14で作るPLAIDインデックスの保存先ディレクトリです。ChromaのインメモリDBと違い、ディスク上に作成されます。
+
+    `SimpleMultiVectorRetriever` はこのノート固有の簡易リトリーバーです。要約だけを検索対象にしつつ、回答生成には対応する元文書を返すために使います。
+
+    - 入力：要約を入れたベクトルストアと、要約メタデータ内で元文書IDを表すキー名（ここでは `doc_id`）
+    - 保持する状態：要約用ベクトルストアと、`doc_id` から元文書 `Document` を引くメモリ上の辞書 `_docstore`
+    - 登録：`set_parent_documents()` で `doc_id` と元文書の対応表を `_docstore` に保存します
+    - 検索：`invoke(query, k=4)` は要約を類似度検索し、ヒットした要約のメタデータから `doc_id` を取り出し、重複を除きながら対応する元文書を返します
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
     ## パート12：複数表現によるインデックス作成
 
     検索に適した短い要約をベクトル化し、ヒットした要約から情報量の多い元文書を返します。検索用表現と回答用文書を分けることで、検索精度と回答に必要な文脈量を両立します。
@@ -146,6 +170,12 @@ def _():
     論文：
 
     https://arxiv.org/abs/2312.06648
+
+    次のセルでは、Lilian Wengのブログ記事2本を読み込みます。`WebBaseLoader` に `bs_kwargs` を渡していないため、他パートのように `SoupStrainer` で本文部分だけに絞らず、ページ全体を読み込みます。
+
+    - データ：[LLM Powered Autonomous Agents](https://lilianweng.github.io/posts/2023-06-23-agent/) と [Thinking about High-Quality Human Data](https://lilianweng.github.io/posts/2024-02-05-human-data-quality/)
+    - 前処理：HTMLの絞り込みなし。`WebBaseLoader.load()` が返す各ページの `Document` をそのまま使います
+    - 出力：`source_documents` = 読み込んだ `Document` リスト（表示される件数は2件）
     """)
     return
 
@@ -168,7 +198,11 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    各文書をLLMで要約します。`batch()` で並行実行するため、`max_concurrency` で同時リクエスト数を制限しています。
+    各文書の全文をLLMへ渡し、検索用の短い要約を作ります。`batch()` は複数の `Document` をまとめてチェーンへ流すための実行方法で、`max_concurrency=5` により同時リクエスト数を最大5件に制限しています。出力は元文書と同じ順序の要約文字列リストです。
+
+    - 入力：`source_documents`（各 `Document` の `page_content` 全文）
+    - 処理：`Summarize the following document:` というプロンプト、チャットモデル、文字列出力パーサーをLCELで接続
+    - 出力：`document_summaries` = 各文書の要約文字列のリスト
     """)
     return
 
@@ -210,7 +244,11 @@ def _():
     mo.md(r"""
     ### 要約と元文書の対応付け
 
-    各要約には元文書と共通の `doc_id` を付けます。検索対象は要約ですが、ヒット後は `doc_id` を使って元文書を返すため、回答生成では省略前の内容を利用できます。
+    各要約には元文書と共通の `doc_id` を付けます。文書1件ごとにUUIDを1つ生成し、要約側のメタデータと元文書側の対応表を結びつける鍵として使います。検索対象は要約ですが、ヒット後は `doc_id` を使って元文書を返すため、回答生成では省略前の内容を利用できます。
+
+    - 入力：`source_documents`
+    - 処理：`id_key = "doc_id"` をキー名にし、`uuid.uuid4()` で各文書のIDを生成
+    - 出力：`source_document_ids` = 元文書と同じ順序のUUID文字列リスト
     """)
     return
 
@@ -246,7 +284,12 @@ def _(document_summaries, id_key, source_document_ids):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    要約をベクトルストアへ登録し、リトリーバーには `doc_id` から元文書を引くための対応表を渡します。
+    要約をベクトルストアへ登録し、リトリーバーには `doc_id` から元文書を引くための対応表を渡します。要約だけをベクトル化して検索し、元文書は `SimpleMultiVectorRetriever` のメモリ上の辞書に置く二層構成です。
+
+    - データ：`summary_documents`（2本の記事の要約。メタデータに `doc_id` を保持）
+    - 前処理：追加の分割なし。要約文字列をそのまま埋め込み対象にします
+    - DB：Chroma、`collection_name="summaries"`。`persist_directory` を指定していないため**インメモリ**です
+    - 出力：`multi_vector_retriever` = 要約検索から元文書を返す `SimpleMultiVectorRetriever`
     """)
     return
 
@@ -360,7 +403,7 @@ def _():
     使用モデルは元ノートの `colbert-ir/colbertv2.0` ではなく
     `lightonai/GTE-ModernColBERT-v1` です。ライブラリとモデルの両方が異なるため、
     検索結果を元ノートと直接比較することはできません。
-    初回実行時はモデルのダウンロードとローカルインデックスの作成が必要です。
+    初回実行時はモデルのダウンロードとローカルインデックスの作成が必要です。次のセルでは `COLBERT_MODEL` 環境変数があればその値を使い、未指定なら `lightonai/GTE-ModernColBERT-v1` を使うモデル名として `colbert_model_name` に保存します。
     """)
     return
 
@@ -376,7 +419,11 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    検索対象として、宮崎駿のWikipedia記事を取得します。
+    検索対象として、英語版Wikipediaの「Hayao_Miyazaki」記事を取得します。`get_wikipedia_page()` はWikipedia APIからページ本文をプレーンテキストで取り出す小さな自作関数で、次のセルでは取得した文字数を表示します。
+
+    - 入力：Wikipediaページタイトル（ここでは `"Hayao_Miyazaki"`）
+    - 処理：`https://en.wikipedia.org/w/api.php` に `action=query`、`prop=extracts`、`explaintext=True` を指定して問い合わせます。Wikipediaの作法に従い、`User-Agent` ヘッダも付けています
+    - 出力：`miyazaki_article` = `page.get("extract")` の返り値。対象ページでは記事本文のプレーンテキスト文字列（表示される数値は文字数）ですが、ページが見つからない場合などは `None` になる可能性があります
     """)
     return
 
@@ -429,7 +476,11 @@ def _():
     ColBERTはパッセージごとにトークン単位のベクトルを持つため、
     パッセージを短く保つとインデックスの肥大を抑えられます。
     なお `GTE-ModernColBERT-v1` は最大299トークンまでしか受け付けず、
-    それを超える分は切り捨てられます。
+    それを超える分は切り捨てられます。分割後の `colbert_passages` の件数が、そのままPLAIDインデックスへ登録するパッセージ数になります。
+
+    - データ：`miyazaki_article`（英語版Wikipediaの「Hayao_Miyazaki」記事本文）
+    - 前処理：`RecursiveCharacterTextSplitter.from_tiktoken_encoder()` / `chunk_size=180`, `chunk_overlap=0`（トークン基準）
+    - 出力：`colbert_passages` = パッセージ文字列のリスト（表示される数値がパッセージ数）
     """)
     return
 
@@ -449,7 +500,7 @@ def _(miyazaki_article):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    ColBERTモデルでパッセージを埋め込みます。通常の埋め込みが1文書あたり1ベクトルなのに対し、ColBERTは**トークンごとに1ベクトル**を作ります。`encode_document()` はパッセージごとに `(トークン数, 次元)` の行列を返すため、長さの違うパッセージは行数の違う行列になります。
+    ColBERTモデルでパッセージを埋め込みます。通常の埋め込みが1文書あたり1ベクトルなのに対し、ColBERTは**トークンごとに1ベクトル**を作ります。`encode_document()` はパッセージごとに `(トークン数, 次元)` のテンソルを返すため、長さの違うパッセージは行数の違うテンソルになります。次のセルは先頭5件のテンソル形状を表示します。
     """)
     return
 
@@ -465,7 +516,7 @@ def _(colbert_model_name, colbert_passages):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    質問側は `encode_query()` で埋め込みます。文書側と違い、モデルによってはクエリを固定長へ揃えるため、行数が一定になることがあります。
+    質問側は `encode_query()` で埋め込みます。入力は質問文字列 `colbert_query`、出力はクエリトークンごとの埋め込みテンソル `query_embedding` です。文書側と違い、モデルによってはクエリを固定長へ揃えるため、行数が一定になることがあります。次のセルは `query_embedding` の形状を表示します。
     """)
     return
 
@@ -483,7 +534,7 @@ def _():
     mo.md(r"""
     ### MaxSimによる採点
 
-    `similarity()` がLate Interactionの採点そのものです。クエリの各トークンについて、文書側のどのトークンと最も似ているかを求め、その最大値をクエリトークン全体で合計します。パッセージ数が少ないうちは、この総当たり計算で十分です。
+    `similarity()` がLate Interactionの採点そのものです。クエリの各トークンについて、文書側のどのトークンと最も似ているかを求め、その最大値をクエリトークン全体で合計します。入力は `query_embedding.unsqueeze(0)` と `passage_embeddings`、出力の `exhaustive_scores` は各パッセージに対するスコアのテンソルです。パッセージ数が少ないうちは、この総当たり計算で十分です。
     """)
     return
 
@@ -507,6 +558,11 @@ def _():
     ### PLAIDインデックス
 
     パッセージ数が増えると総当たりでは追いつかなくなります。PLAIDは重心による枝刈りと量子化で、トークンごとのベクトルという多量のデータを実用的な容量と速度へ抑えます。`fast-plaid` はそのRust実装で、`encode_document()` が返したテンソルをそのまま受け取ります。
+
+    - 入力：`passage_embeddings`（パッセージごとのトークン単位テンソル。各要素は `(トークン数, 次元)`）
+    - DB：PLAIDインデックス。保存先は `COLBERT_INDEX_DIR` が指す `.colbert-index/` ディレクトリです
+    - 永続性：他パートのインメモリChromaと違い、ディスク上に作られ、実行後も残ります。`.colbert-index/` は `.gitignore` 済みです
+    - 出力：`colbert_index` = `FastPlaid` の検索用インデックス
     """)
     return
 
@@ -523,7 +579,7 @@ def _(passage_embeddings):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    検索結果は `(パッセージの位置, スコア)` の組で返ります。PLAIDは近似検索ですが、この規模では総当たりのMaxSimと同じ順位・スコアになることを次のセルで確認できます。
+    検索結果は `(パッセージの位置, スコア)` の組で返ります。PLAIDは近似検索なので、次のセルでは総当たりのMaxSim結果と並べて比較します。
     """)
     return
 
@@ -540,7 +596,7 @@ def _(colbert_index, query_embedding):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    総当たりとPLAIDのスコアを並べて比較します。この規模では一致しますが、コーパスが大きくなるとPLAIDの近似により差が出ることがあります。
+    総当たりとPLAIDのスコアを並べて比較します。コーパスが大きくなると、PLAIDの近似により総当たりのMaxSimと差が出ることがあります。
     """)
     return
 
@@ -595,6 +651,11 @@ def _():
 
     `BaseRetriever` はPydanticモデルなので、モデルやインデックスのような
     任意のオブジェクトを保持するには `arbitrary_types_allowed` が必要です。
+
+    - 保持する属性：`encoder`（クエリを埋め込む `MultiVectorEncoder`）、`index`（検索する `FastPlaid`）、`passages`（位置から本文を引くパッセージ文字列リスト）、`k`（返す件数）
+    - 入力：`_get_relevant_documents()` に渡されるクエリ文字列
+    - 処理：クエリを `encode_query()` で埋め込み、PLAIDインデックスを `top_k=self.k` で検索し、返った位置からパッセージ本文を取り出します
+    - 出力：`page_content` にパッセージ本文、`metadata` に `position` と `score` を持つ `Document` のリスト
     """)
     return
 
@@ -643,7 +704,7 @@ def _(colbert_index, colbert_model, colbert_passages):
 def _():
     mo.md(r"""
     これで他のリトリーバーと同じ `invoke()` で呼び出せます。戻り値が `Document` に
-    なったため、`format_docs` やLCELのパイプへそのまま渡せます。
+    なったため、`format_colbert_docs` やLCELのパイプへそのまま渡せます。
     """)
     return
 

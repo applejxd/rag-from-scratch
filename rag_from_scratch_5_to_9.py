@@ -102,6 +102,22 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
+    ## このノートブックの共通部品
+
+    冒頭の `with app.setup` ブロック（marimo上では折りたたまれています）で、以下の共通部品を定義しています。パート5〜9のコードセルはこれらを繰り返し使います。
+
+    - `make_chat_model()`：回答生成やクエリ変換に使うチャットモデル。OpenRouter経由で `openai/gpt-5-nano`（環境変数 `MODEL` で変更可）を呼びます。出力を安定させるため `temperature=0` を指定しています。
+    - `make_embeddings()`：埋め込みモデル。既定は `openai/text-embedding-3-small` です。OpenRouterはOpenAI互換ですがトークナイザ情報を返さないため、クライアント側のトークン数チェックを無効化（`check_embedding_ctx_length=False` / `tiktoken_enabled=False`）しています。
+    - `format_docs(docs)`：`Document` のリストを、本文を空行2つでつないだ1つの文字列へ変換します。検索結果をプロンプトの `{context}` へ埋め込むために使います。
+    - `split_queries(text)`：LLMが生成した複数クエリの文字列を改行で分割し、前後の空白と空行を除いた `list[str]` にします。空行を除かないと空文字列が埋め込みAPIへ渡り、HTTP 400（`expected string to have >=1 characters`）になるためです。
+    - `load_rag_prompt()`：LangChain Hubの `rlm/rag-prompt` と同じ内容のプロンプト。元ノートは実行時に `hub.pull()` で取得していましたが、外部サービスへの依存を避け、かつ文面をその場で読めるようローカルへ写しています。
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
     ## パート5：Multi Query
 
     一つの質問を異なる観点の複数クエリへ言い換え、それぞれの検索結果を重複排除して統合します。単一の表現だけでは取得できない関連文書を補うことが目的です。
@@ -122,7 +138,12 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    まずブログ記事を読み込みます。パート5〜9はすべてこのインデックスを共有します。
+    ここから3つのコードセルで、パート5〜9が共有する単一のインデックスを作ります。まず検索対象の記事を読み込み、HTMLのうち本文・タイトル・ヘッダーに関係する要素だけを抽出します。
+
+    - データ：Lilian Wengのブログ記事 [LLM Powered Autonomous Agents](https://lilianweng.github.io/posts/2023-06-23-agent/)
+    - 前処理：`bs4.SoupStrainer` で `post-content` / `post-title` / `post-header` クラスのみを解析対象にします
+    - DB：このセルではまだ作成せず、後続のコードセルで分割してChromaへ登録します
+    - 出力：`blog_documents` = 読み込んだ `Document` リスト（表示される数値は1件目の本文文字数）
     """)
     return
 
@@ -146,7 +167,12 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    トークン基準で300トークンごと、50トークンの重なりを持たせて分割します。分割後のチャンク数を確認します。
+    読み込んだ記事を検索しやすいサイズのチャンクへ分割します。`from_tiktoken_encoder()` を使うため、`chunk_size` と `chunk_overlap` は文字数ではなくトークン数で解釈されます。
+
+    - データ：`blog_documents`（上のセルで読み込んだLilian Wengの記事）
+    - 前処理：`RecursiveCharacterTextSplitter.from_tiktoken_encoder()` / `chunk_size=300`, `chunk_overlap=50`（トークン基準）
+    - DB：このセルではまだ作成せず、分割後のチャンクを次のコードセルでChromaへ登録します
+    - 出力：`document_chunks` = 分割後の `Document` リスト（表示される数値はチャンク数）
     """)
     return
 
@@ -164,7 +190,12 @@ def _(blog_documents):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    チャンクを埋め込みへ変換してベクトルストアへ保存し、リトリーバーを作成します。
+    分割済みチャンクを埋め込みへ変換し、Chromaのベクトルストアへ登録してリトリーバーを作ります。`persist_directory` を指定していないため、このChromaはノートブック実行中だけ使うインメモリDBです。
+
+    - データ：`document_chunks`（300トークン基準で分割した記事チャンク）
+    - 前処理：`make_embeddings()` で各チャンクを埋め込みベクトルへ変換します
+    - DB：Chroma。`persist_directory` なしの**インメモリ**で、パート5〜9すべてがこの単一の `retriever` を共有します
+    - 出力：`retriever` = 既定設定（類似度検索・`k=4`）のリトリーバー
     """)
     return
 
@@ -183,7 +214,7 @@ def _():
     mo.md(r"""
     ### プロンプト
 
-    LLMに5種類の検索クエリを改行区切りで生成させます。生成した各クエリへ同じリトリーバーを適用するため、LCELの `retriever.map()` を使用します。
+    LLMに5種類の検索クエリを改行区切りで生成するよう指示します。このセルではプロンプトとクエリ生成チェーンを作り、`StrOutputParser` で文字列化した後、`split_queries` で `list[str]` に変換します。
     """)
     return
 
@@ -205,6 +236,14 @@ def _():
         | split_queries
     )
     return (multi_query_generator,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    パート5とパート6で使い回す共通の評価質問を用意します。質問は `What is task decomposition for LLM agents?` で、LLMエージェントにおけるタスク分解を検索・回答できるかを見ます。
+    """)
+    return
 
 
 @app.cell
@@ -233,7 +272,11 @@ def _(multi_query_generator, retrieval_question):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    各クエリで検索した結果を統合します。クエリ間で同じ文書が重複して取得されるため、`get_unique_union` でシリアライズした文字列を使って重複を除きます。
+    各クエリで検索した結果を統合するチェーンを作ります。クエリ間で同じ文書が重複して取得されるため、自作関数 `get_unique_union` で重複を除きます。
+
+    - 入力：`documents` = 複数クエリそれぞれの検索結果を持つ `list[list]`
+    - 処理：各 `Document` を `dumps` で文字列化し、`set` で重複を取り除いてから `loads` で `Document` へ戻します。`Document` は直接 `set` に入れて重複判定できないため、文字列化しています。
+    - 出力：重複を除いた `Document` のリスト。`multi_query_retrieval_chain` は、5クエリの生成指示、`retriever.map()` による各クエリでの検索、重複排除までをまとめたチェーンです。
     """)
     return
 
@@ -250,6 +293,14 @@ def _(multi_query_generator, retriever):
         multi_query_generator | retriever.map() | get_unique_union
     )
     return (multi_query_retrieval_chain,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    共通の評価質問を `multi_query_retrieval_chain` に渡し、5クエリ分の検索結果を重複排除した後の件数を確認します。ここで表示される数値は、最終回答に渡す候補文書の数です。
+    """)
+    return
 
 
 @app.cell
@@ -317,6 +368,14 @@ def _():
     return (rag_fusion_prompt,)
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    RAG-Fusion用のクエリ生成チェーンを組み立てます。パート5のMulti Queryは5種類の別表現を作るプロンプトでしたが、ここでは関連する検索クエリを4件生成するよう指示しています。出力は改行区切りの文字列なので、最後に `split_queries` で空行を除いたリストへ変換します。
+    """)
+    return
+
+
 @app.cell
 def _(rag_fusion_prompt):
     rag_fusion_query_generator = (
@@ -331,7 +390,11 @@ def _(rag_fusion_prompt):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    Reciprocal Rank Fusion（RRF）は、各検索結果での順位 `rank` だけを使い、`1 / (rank + k)` を文書ごとに合計します。検索システムごとにスケールが異なる生スコアを比較せずに済むのが利点です。定数 `k`（ここでは60）は上位の順位差が過度に強調されるのを抑えます。
+    Reciprocal Rank Fusion（RRF）は、各検索結果での0始まりの順位 `rank` だけを使い、`1 / (rank + k)` を文書ごとに合計します。検索システムごとにスケールが異なる生スコアを比較せずに済むのが利点です。
+
+    - 入力：`results` = 複数クエリそれぞれの検索結果を持つ `list[list]`
+    - 処理：`dumps` で `Document` を文字列化して文書ごとの合計スコアを集計します。定数は `k=60` で、最上位文書の加点は `1 / (0 + 60)` です
+    - 出力：`(Document, score)` のタプルのリスト。通常のリトリーバーが返す `Document` のリストとは型が違う点に注意します。
     """)
     return
 
@@ -360,6 +423,14 @@ def _(rag_fusion_query_generator, retriever):
     return (rag_fusion_retrieval_chain,)
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    共通の評価質問をRAG-Fusionの検索チェーンに渡し、RRFで融合・再順位付けした後の件数を確認します。出力の `fused_documents` は、文書と融合スコアのタプルをスコア降順に並べたリストです。
+    """)
+    return
+
+
 @app.cell
 def _(rag_fusion_retrieval_chain, retrieval_question):
     fused_documents = rag_fusion_retrieval_chain.invoke(
@@ -386,7 +457,7 @@ def _(fused_documents):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    融合・再順位付けした文書をコンテキストとして回答を生成します。
+    RRFで再順位付けした結果をコンテキストとして回答を生成します。このチェーンでは `rag_fusion_retrieval_chain` が返す `(Document, score)` のタプル列をそのまま `context` へ渡しており、`format_docs` は通していません。最後に `StrOutputParser` を通すため、戻り値は文字列です。
     """)
     return
 
@@ -422,6 +493,14 @@ def _():
     ## パート7：分解
 
     複雑な質問を、単独で検索・回答できる複数のサブ質問へ分解します。ここでは、前の回答を次の質問の背景として順に渡す方法と、各サブ質問を独立に回答して最後に統合する方法を比較します。
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    次の3つのコードセルで、サブ質問を生成するプロンプトとチェーンを作り、パート7で扱う元の質問を用意します。`subquestion_generator` は入力された質問を3つのサブ質問へ分解するよう指示し、`StrOutputParser` で文字列化した後、`split_queries` で空行を除いたリストにします。ここでの元質問は、LLM自律エージェントシステムの主要コンポーネントを問う内容です。
     """)
     return
 
@@ -499,7 +578,7 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    サブ質問に答えるチェーンを組み立てます。`q_a_pairs` に、それまでに得た質問と回答の組を渡す点が通常のRAGチェーンとの違いです。
+    サブ質問に答えるチェーンを組み立てます。`q_a_pairs` に、それまでに得た質問と回答の組を渡す点が通常のRAGチェーンとの違いです。最後に `StrOutputParser` を通すため、各回答は文字列になります。
     """)
     return
 
@@ -523,7 +602,11 @@ def _(recursive_answer_prompt, retriever):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    サブ質問を順に処理し、回答を `accumulated_qa` へ積み上げます。各回答が次の質問の背景として渡るため、処理は直列になります。
+    サブ質問を順に処理し、回答を `accumulated_qa` へ積み上げます。`accumulated_qa` は反復のたびに成長し、各回答が次の質問の背景として渡るため、処理は直列になります。
+
+    - 入力：`subquestions` と、直前で作った `recursive_rag_chain`
+    - 処理：`format_qa_pair(question, answer)` で1組の質問と回答を整形し、各サブ質問の回答後に `accumulated_qa` へ追記します
+    - 出力：`accumulated_qa` = すべての質問・回答ペアを連結した文字列、`recursive_answer` = 最後のサブ質問への回答。この方式では最後のサブ質問への回答がそのまま最終出力になります。
     """)
     return
 
@@ -549,7 +632,7 @@ def _(recursive_rag_chain, subquestions):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    積み上がった質問と回答の組を確認します。これが後続のサブ質問へ背景として渡されていました。
+    次の2セルは、再帰的に作った結果の確認です。まず `print(accumulated_qa)` で整形済みのQ&Aコンテキスト全体を表示し、その後 `recursive_answer` として最後のサブ質問への回答を表示します。
     """)
     return
 
@@ -592,6 +675,18 @@ def _():
     return
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    `retrieve_and_answer_subquestions` は、分解したサブ質問を個別に検索・回答する自作関数です。再帰的な方式と違い、各サブ質問の回答時に他の回答を背景として渡しません。
+
+    - 入力：`question` = 分解したい元の質問文字列
+    - 処理：`subquestion_generator` でサブ質問を作り、各サブ質問について共有リトリーバーで検索し、`load_rag_prompt()` と `decomposition_model` で回答します
+    - 出力：`(answers, generated_subquestions)` = 回答リストとサブ質問リストのタプル。セルではパート7の質問に対して実行し、回答件数を確認します。
+    """)
+    return
+
+
 @app.cell
 def _(decomposition_model, decomposition_question, retriever, subquestion_generator):
     def retrieve_and_answer_subquestions(question):
@@ -621,6 +716,10 @@ def _(decomposition_model, decomposition_question, retriever, subquestion_genera
 def _():
     mo.md(r"""
     サブ質問と回答を1つのコンテキストへ整形します。再帰的な方式と違い、各回答は互いに独立して得られたものです。
+
+    - 入力：`questions` = サブ質問リスト、`answers` = 対応する回答リスト
+    - 処理：`format_qa_pairs` が番号付きの `Question i` / `Answer i` 形式へ連結します
+    - 出力：`qa_context` = 元の質問への回答合成に渡すQ&Aコンテキスト。次のセルの `print(qa_context)` で、LLMへ渡す前の整形結果を確認します。
     """)
     return
 
@@ -691,6 +790,14 @@ def _():
     return
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    2つのFew-shot例を使い、具体的な質問をより一般的な「一歩引いた質問」へ言い換える方法をLLMへ示します。`Could the members of The Police perform lawful arrests?` を能力一般の問いへ、`Jan Sindel’s was born in what country?` を人物史の問いへ変換する例として渡します。
+    """)
+    return
+
+
 @app.cell
 def _():
     examples = [
@@ -725,7 +832,7 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    Few-shot例で「一歩引いた質問」への言い換え方をLLMへ示します。
+    Few-shot付きプロンプトをチャットモデルにつなぎ、一歩引いた質問を生成するチェーンを作ります。出力は検索に渡す一般化された質問文字列です。
     """)
     return
 
@@ -736,6 +843,14 @@ def _(step_back_prompt):
         step_back_prompt | make_chat_model() | StrOutputParser()
     )
     return (step_back_query_generator,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    パート8で使う質問を用意します。内容はパート5・6と同じ `What is task decomposition for LLM agents?` で、通常の検索と一歩引いた質問による検索を比較しやすくしています。
+    """)
+    return
 
 
 @app.cell
@@ -808,6 +923,14 @@ def _():
     return
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    HyDEの仮想文書生成チェーンを作ります。プロンプトでは、質問そのものを検索するのではなく「質問に答える科学論文の一節を書け」と指示し、その生成文を後続の検索クエリとして使います。
+    """)
+    return
+
+
 @app.cell
 def _():
     hyde_template = 'Please write a scientific paper passage to answer the question\nQuestion: {question}\nPassage:'
@@ -816,6 +939,14 @@ def _():
         hyde_prompt | make_chat_model() | StrOutputParser()
     )
     return (hypothetical_document_generator,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    パート9で使う質問を用意します。質問は `What is task decomposition for LLM agents?` で、タスク分解に関する仮想文書を生成してから検索する流れを確認します。
+    """)
+    return
 
 
 @app.cell
@@ -838,12 +969,28 @@ def _(hyde_question, hypothetical_document_generator):
     return
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    仮想文書生成チェーンと共有リトリーバーを直列につなぎます。`hyde_retrieval_chain` は、LLMが生成した仮想文書の文字列をそのまま検索クエリとして `retriever` へ渡し、関連する `Document` を取得します。
+    """)
+    return
+
+
 @app.cell
 def _(hyde_question, hypothetical_document_generator, retriever):
     hyde_retrieval_chain = hypothetical_document_generator | retriever
     hyde_documents = hyde_retrieval_chain.invoke({"question": hyde_question})
     hyde_documents
     return (hyde_documents,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    HyDEで取得した文書を使って回答を生成します。検索用の `hyde_retrieval_chain` と回答生成用の `hyde_answer_chain` は別チェーンで、検索結果 `hyde_documents` を `format_docs` で整形して `context` へ手動で渡しています。
+    """)
+    return
 
 
 @app.cell

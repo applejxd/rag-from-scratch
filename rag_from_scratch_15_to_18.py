@@ -133,6 +133,31 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
+    ## このノートブックの共通部品
+
+    冒頭の `with app.setup` ブロック（marimo上では折りたたまれています）で、以下の共通部品を定義しています。各パートのコードセルはこれらを繰り返し使います。
+
+    - `make_chat_model()`：回答生成用のチャットモデル。OpenRouter経由で `openai/gpt-5-nano`（環境変数 `MODEL` で変更可）を呼びます。出力を安定させるため `temperature=0` を指定し、このノートでは再試行しないよう `max_retries=0` も指定しています。
+    - `make_embeddings()`：埋め込みモデル。既定は `openai/text-embedding-3-small` です。OpenRouterはOpenAI互換ですがトークナイザ情報を返さないため、クライアント側のトークン数チェックを無効化（`check_embedding_ctx_length=False` / `tiktoken_enabled=False`）しています。
+    - `format_docs(docs)`：`Document` のリストを、本文を空行2つでつないだ1つの文字列へ変換します。検索結果をプロンプトの `{context}` へ埋め込むために使います。
+    - `load_rag_prompt()`：LangChain Hubの `rlm/rag-prompt` と同じ内容のプロンプト。元ノートは実行時に `hub.pull()` で取得していましたが、外部サービスへの依存を避け、かつ文面をその場で読めるようローカルへ写しています。
+    - `split_queries(text)`：LLMが生成した複数クエリの文字列を改行で分割し、空行を除いた `list[str]` にします。空文字列が埋め込みAPIへ渡らないようにするための前処理です。
+
+    このノートの中心となる自作関数 `rerank_with_cross_encoder(question, docs, top_n=3)` は、ベクトル検索で得た候補をCrossEncoderで再評価します。
+
+    - 入力：質問文字列 `question`、`Document` のリスト `docs`、残す件数 `top_n`
+    - モデル：環境変数 `RERANK_MODEL` で指定し、既定は `cross-encoder/ms-marco-MiniLM-L-6-v2` です。`sentence-transformers` の `CrossEncoder` をローカルで実行するため、追加のAPIキーは不要です
+    - 実行デバイス：`torch.cuda.is_available()` により、GPUがあれば `cuda`、なければ `cpu` を使います
+    - 処理：`(質問, 文書本文)` のペアを作り、`predict()` で関連度スコアを算出して降順に並べます
+    - 出力：上位 `top_n` 件を、`metadata["relevance_score"]` にスコアを持たせた新しい `Document` として返します。元の `Document` は変更しません
+    - 注意：`docs` が空なら空リストを返します
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
     ## パート15：再ランキング
 
     最初の検索では候補を広めに取得し、より精密なモデルで質問との関連度を再評価して上位だけを残します。RAG-Fusionが複数の検索順位を統合するのに対し、再ランキングは質問と各候補文書を直接比較します。
@@ -145,7 +170,12 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    パート15で使うインデックスを作成します。ブログ記事を読み込み、トークン基準で分割します。
+    パート15で使うインデックスの元になるチャンクを作成します。ブログ記事を読み込み、HTMLの本文周辺だけを取り出してからトークン基準で分割し、分割後のチャンク数を出力します。
+
+    - データ：Lilian Wengのブログ記事 [LLM Powered Autonomous Agents](https://lilianweng.github.io/posts/2023-06-23-agent/)
+    - HTMLの絞り込み：`bs4.SoupStrainer` で `post-content` / `post-title` / `post-header` クラスの要素だけを解析対象にします
+    - 前処理：`RecursiveCharacterTextSplitter.from_tiktoken_encoder()` / `chunk_size=300`, `chunk_overlap=50`（トークン基準）
+    - 出力：`document_chunks` = 分割後の `Document` リスト（表示される数値がチャンク数）
     """)
     return
 
@@ -172,6 +202,19 @@ def _():
     return (document_chunks,)
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    分割したチャンクを埋め込みへ変換し、Chromaへ登録して検索用のリトリーバーを作成します。`retriever` と `vectorstore` の両方を返しているのは、後段で同じDBから `k=10` の別リトリーバー `candidate_retriever` を作るためです。
+
+    - データ：`document_chunks`（Lilian Wengのブログ記事を300トークン単位で分割した `Document` リスト）
+    - 前処理：前セルで作成済み（`chunk_size=300`, `chunk_overlap=50`、トークン基準）
+    - DB：Chroma。`persist_directory` を指定していないため**インメモリ**です
+    - 出力：`retriever` = 既定設定（類似度検索・`k=4`）のリトリーバー、`vectorstore` = Chromaのベクトルストア
+    """)
+    return
+
+
 @app.cell
 def _(document_chunks):
     vectorstore = Chroma.from_documents(
@@ -180,6 +223,18 @@ def _(document_chunks):
     )
     retriever = vectorstore.as_retriever()
     return retriever, vectorstore
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    再ランキングとの比較用ベースラインとして、パート6のRAG-Fusionと同様の部品をここで再掲します。最初のセルで「1つの質問から4つの検索クエリを出力する」プロンプトを作り、次のセルでチャットモデル、文字列パーサー、`split_queries` をつないでクエリ生成チェーンにします。
+
+    - 入力：`{question}` に入る質問文字列
+    - 処理：LLMに関連する4つの検索クエリを生成させ、改行区切りの出力から空行を除きます
+    - 出力：`rag_fusion_prompt` = プロンプト、`rag_fusion_query_generator` = 4つの検索クエリを返すチェーン
+    """)
+    return
 
 
 @app.cell
@@ -203,6 +258,14 @@ def _(rag_fusion_prompt):
     return (rag_fusion_query_generator,)
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    パート15全体で使い回す共通の質問を定義します。RAG-Fusionによる検索、RRFで融合した件数の確認、再ランキング、最終的なRAGチェーンの回答を同じ質問で比較します。
+    """)
+    return
+
+
 @app.cell
 def _():
     reranking_question = "What is task decomposition for LLM agents?"
@@ -212,7 +275,11 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    比較のため、まずRAG-Fusion（順位の統合）で検索します。
+    比較のため、まずRAG-Fusion（順位の統合）で検索します。`reciprocal_rank_fusion` はパート6（`rag_from_scratch_5_to_9.py`）と同一の実装を、このノートでも再掲しています。
+
+    - 入力：複数クエリそれぞれの検索結果 `results`（`list[list]`）と定数 `k=60`
+    - 処理：各検索結果での順位 `rank` だけを使い、文書ごとに `1 / (rank + k)` を合計します。文書は `dumps()` で文字列化して重複をまとめ、最後に `loads()` で `Document` に戻します
+    - 出力：RRFスコアの降順に並んだ `(Document, score)` のタプルのリスト
     """)
     return
 
@@ -241,12 +308,28 @@ def _(rag_fusion_query_generator, retriever):
     return (rag_fusion_retrieval_chain,)
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    共通の質問をRAG-Fusionの検索チェーンへ渡し、4つの検索クエリの結果をRRFで融合します。ここでは回答生成には進まず、融合後に何件の `(Document, score)` が残ったかだけを確認します。
+    """)
+    return
+
+
 @app.cell
 def _(rag_fusion_retrieval_chain, reranking_question):
     fused_documents = rag_fusion_retrieval_chain.invoke(
         {"question": reranking_question}
     )
     len(fused_documents)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    RAG-Fusionを使うベースライン回答を生成します。`context` にはRRFで融合した `(Document, score)` のリストを渡し、同じ `reranking_question` に対する回答を作ることで、後段の再ランキング付きRAGチェーンと比較できるようにします。
+    """)
     return
 
 
@@ -272,7 +355,7 @@ def _():
     mo.md(r"""
     再ランキングは、Cohereなどのマネージド型Rerank APIを使う方法もあります（[Cohere Re-Rank](https://python.langchain.com/docs/integrations/retrievers/cohere-reranker#doing-reranking-with-coherererank)、[解説記事](https://txt.cohere.com/rerank/)）。
 
-    ここでは外部APIキーを必要としない方式として、`sentence-transformers` の[CrossEncoder](https://www.sbert.net/docs/cross_encoder/pretrained_models.html)をローカルで実行します。まず最初にベクトル検索で10件を取得し、質問と各文書のペアをCrossEncoderへ直接入力して関連度スコアを計算し、上位3件へ絞ります。GPUが使える環境では自動的にGPU上で実行され、関連度は各文書の `metadata["relevance_score"]` に保存されます。
+    ここでは外部APIキーを必要としない方式として、冒頭で定義した `rerank_with_cross_encoder` により `sentence-transformers` の[CrossEncoder](https://www.sbert.net/docs/cross_encoder/pretrained_models.html)をローカルで実行します。以降のセルでは、候補取得、CrossEncoderによる再評価、上位3件への絞り込みを順に確認します。
 
     ![再ランキングの流れ（候補取得→スコアリング→上位選択）](./imgs/Cohere_Re-Rank.png)
     """)
@@ -282,7 +365,11 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    まず候補を広めに10件取得します。この時点の順位はベクトル類似度によるものです。
+    まず候補を広めに10件取得します。通常の `retriever` は既定の `k=4` ですが、ここでは再ランキング前に候補を広く残すため `search_kwargs={"k": 10}` を指定します。この時点の順位はCrossEncoderではなくベクトル類似度によるものです。
+
+    - 入力：共通質問 `reranking_question` と、インメモリChromaの `vectorstore`
+    - 処理：`vectorstore.as_retriever(search_kwargs={"k": 10})` で候補取得用リトリーバーを作り、質問で検索します
+    - 出力：`candidate_retriever` = `k=10` のリトリーバー、`candidate_documents` = ベクトル類似度順の候補 `Document` リスト（表示される数値が件数）
     """)
     return
 
@@ -346,6 +433,10 @@ def _():
     `langchain.retrievers` モジュール自体が存在しません。
     現在は `BaseRetriever` を継承して同じ役割のクラスを自分で書きます。
     実装するのは `_get_relevant_documents()` の1メソッドだけです。
+
+    - 属性：`base_retriever` は候補を取るリトリーバー、`top_n` は残す件数（既定3）です
+    - `_get_relevant_documents()`：クエリ文字列を受け取り、`base_retriever` で候補を取得してから `rerank_with_cross_encoder` で上位 `top_n` 件の `Document` リストへ絞ります
+    - `model_config = ConfigDict(arbitrary_types_allowed=True)`：`BaseRetriever` はPydanticモデルです。任意型のオブジェクトをフィールドに持つカスタムRetrieverでも検証エラーにしない設定を、このクラスでも明示しています
     """)
     return
 
@@ -393,8 +484,7 @@ def _(reranking_question, reranking_retriever):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    リトリーバーになったので、RAGチェーンへそのまま差し込めます。
-    ベクトル検索のリトリーバーと差し替えるだけで、再ランキング付きの検索になります。
+    リトリーバーになったので、RAGチェーンへそのまま差し込めます。チェーン全体の形は通常のRAGと同じで、`context` 側のリトリーバーを `reranking_retriever` に差し替えるだけです。これにより、検索結果を `format_docs` で整形する前に「10件取得して3件へ絞る」処理が組み込まれます。
     """)
     return
 

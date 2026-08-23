@@ -63,6 +63,22 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
+    ## このノートブックの共通部品
+
+    冒頭の `with app.setup` ブロック（marimo上では折りたたまれています）で、以下の共通部品を定義しています。各パートのコードセルはこれらを繰り返し使います。
+
+    - `make_chat_model()`：回答生成用のチャットモデル。OpenRouter経由で `openai/gpt-5-nano`（環境変数 `MODEL` で変更可）を呼びます。出力を安定させるため `temperature=0` を指定しています。
+    - `make_embeddings()`：埋め込みモデル。既定は `openai/text-embedding-3-small` です。OpenRouterはOpenAI互換ですがトークナイザ情報を返さないため、クライアント側のトークン数チェックを無効化（`check_embedding_ctx_length=False` / `tiktoken_enabled=False`）しています。
+    - `cosine_similarity(vec1, vec2)`：このノートブック固有のヘルパーです。2つのベクトルの内積をそれぞれのノルムの積で割り、`float` の類似度（-1〜1）として返します。
+
+    このノートブックでは、Chromaなどのベクトルストアは一切作りません。パート10は埋め込み同士を直接比較し、パート11は自然言語の質問を検索条件へ構造化するところまでを扱います。
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
     ## パート10：論理ルーティングとセマンティックルーティング
 
     ルーティングは、質問に応じて使用するデータソースやプロンプトを切り替える処理です。論理ルーティングではLLMの構造化出力で離散的な行き先を選び、セマンティックルーティングでは埋め込みの類似度で最も近い行き先を選びます。
@@ -83,7 +99,7 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    まず行き先を表すデータモデルを定義します。`Literal` で候補を3つに限定しているため、LLMはこの範囲でしか値を返せません。
+    まず行き先を表すデータモデルを定義します。`Literal` で候補を `python_docs` / `js_docs` / `golang_docs` の3つに限定しているため、LLMはこの範囲でしか値を返せません。`Field(description=...)` の文面は構造化出力のスキーマに含まれ、そのままLLMへの指示として渡されます。
     """)
     return
 
@@ -162,6 +178,14 @@ def _(router):
     return route_result, routing_question
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    前のセルでは、LangChainのプロンプトコードに関する質問を `router` へ渡しました。続く2セルは、返り値そのものと `datasource` フィールドの確認です。返るのは自由文ではなく `RouteQuery` インスタンスなので、`.datasource` で選択されたデータソース名を取り出せます。
+    """)
+    return
+
+
 @app.cell
 def _(route_result):
     route_result
@@ -177,7 +201,7 @@ def _(route_result):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    選択された `route_result.datasource` を使い、対応する検索チェーンへ処理を振り分けます。この例では文字列を返していますが、実際には各データソース用のRAGチェーンを接続します。
+    選択された `route_result.datasource` を使い、対応する検索チェーンへ処理を振り分けます。`choose_route` は `python_docs`、`js_docs` を順に判定し、それ以外（`Literal` 上は `golang_docs`）をGo用として扱います。この例では文字列を返していますが、実際には各データソース用のRAGチェーンを接続します。
 
     https://python.langchain.com/docs/expression_language/how_to/routing
     """)
@@ -195,6 +219,14 @@ def _(router):
 
     logical_routing_chain = router | RunnableLambda(choose_route)
     return (logical_routing_chain,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    次のセルでは、同じ質問を `logical_routing_chain` に渡します。`router` が作った `RouteQuery` を `choose_route` が受け取り、選ばれた分岐先を表す文字列を返します。このノートブックでは実際の検索DBへ接続せず、どのチェーンへ進むかだけを表示します。
+    """)
+    return
 
 
 @app.cell
@@ -247,6 +279,14 @@ def _():
     return math_template, prompt_templates
 
 
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    次のセルでは、2つの候補プロンプトをあらかじめ埋め込みへ変換します。質問ごとに候補側を再計算しないよう、`make_embeddings()` で埋め込みモデルを用意し、`embed_documents(prompt_templates)` に文字列リストを渡します。出力の `prompt_embeddings` はプロンプト数と同じ2件のベクトルです。
+    """)
+    return
+
+
 @app.cell
 def _(prompt_templates):
     embeddings = make_embeddings()
@@ -258,7 +298,7 @@ def _(prompt_templates):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    質問の埋め込みと各プロンプトの埋め込みのコサイン類似度を計算し、値を確認します。左が物理、右が数学のプロンプトに対する類似度です。
+    質問の埋め込みと各プロンプトの埋め込みのコサイン類似度を計算し、値を確認します。`prompt_templates` の順番が物理、数学なので、出力リストも左が物理テンプレート、右が数学テンプレートに対する類似度です。ここでは質問 `What's a black hole` がどちらのプロンプトに近いかを確認します。
     """)
     return
 
@@ -277,7 +317,13 @@ def _(embeddings, prompt_embeddings):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    最も類似度が高いプロンプトを選ぶ関数を `RunnableLambda` でチェーンへ組み込みます。実行すると、選ばれたプロンプトが標準出力に表示されます。
+    最も類似度が高いプロンプトを選ぶ関数を `RunnableLambda` でチェーンへ組み込みます。
+
+    - 入力：`RunnablePassthrough()` から渡された `{"query": ...}` 形式の辞書
+    - 処理：質問を `embed_query()` で埋め込み、事前計算した `prompt_embeddings` とのコサイン類似度を計算します。`np.argmax` で最も類似度が高いテンプレートを選び、選択結果を `Using MATH` または `Using PHYSICS` として標準出力へ表示します。
+    - 出力：選ばれたテンプレート文字列から作った `PromptTemplate`
+
+    その後、選ばれた `PromptTemplate`、チャットモデル、`StrOutputParser` をつなぎ、回答文字列を返すチェーンにします。
     """)
     return
 
@@ -301,6 +347,14 @@ def _(embeddings, math_template, prompt_embeddings, prompt_templates):
         | StrOutputParser()
     )
     return (semantic_routing_chain,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    次のセルはセマンティックルーティングチェーンの実行です。`prompt_router` 内の `print` により、回答本文より先に選ばれたプロンプトの種類（`Using MATH` または `Using PHYSICS`）が標準出力へ表示されます。
+    """)
+    return
 
 
 @app.cell
@@ -344,7 +398,9 @@ def _():
 
     ![クエリ構造化の流れ](./imgs/query_structuring.png)
 
-    ベクトル類似度だけで検索すると、公開日や動画の長さといった条件を正確に扱えません。LLMで質問を意味検索用テキストとメタデータ条件へ分離し、ベクトル検索とフィルターを組み合わせます。まず、YouTubeの文字起こしに付随するメタデータを確認します。
+    ベクトル類似度だけで検索すると、公開日や動画の長さといった条件を正確に扱えません。LLMで質問を意味検索用テキストとメタデータ条件へ分離し、ベクトル検索とフィルターを組み合わせます。
+
+    まず、YouTube動画 https://www.youtube.com/watch?v=pbAd8O1Lvm4 の文字起こしを読み込み、付随するメタデータを確認します。`add_video_info=False` を指定しているため、再生回数や公開日などの追加メタデータは取得されず、出力されるメタデータは最小限になります。
 
     ドキュメント：
 
@@ -366,12 +422,12 @@ def _():
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    次の機能を持つインデックスを構築したと仮定します。
+    次の機能を持つインデックスを構築したと仮定します。これは「そういうDBがあると仮定した」仮想のスキーマであり、このノートブックでは実際のインデックスもDBも作りません。実際に行うのは、自然言語の質問を検索条件オブジェクトへ変換するところまでです。
 
     1. 各ドキュメントの `contents` と `title` を対象に非構造化検索ができる
     2. `view count`、`publication date`、`length` を範囲指定で絞り込める
 
-    `TutorialSearch` スキーマは、意味検索に使う文字列と範囲フィルターを分離します。LLMは質問に明示された条件だけを各フィールドへ設定します。
+    `TutorialSearch` スキーマは、意味検索に使う文字列と範囲フィルターを分離します。`content_search` / `title_search` は意味検索用の文字列で、`min_view_count` / `max_view_count`、`earliest_publish_date` / `latest_publish_date`、`min_length_sec` / `max_length_sec` は範囲フィルターです。LLMは質問に明示された条件だけを各フィールドへ設定し、`pretty_print()` は既定値と異なるフィールドだけを表示する確認用ヘルパーです。
     """)
     return
 
@@ -412,6 +468,14 @@ def _():
     structured_query_model = make_chat_model().with_structured_output(TutorialSearch)
     query_analyzer = query_prompt | structured_query_model
     return (query_analyzer,)
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    続く4つのセルでは、同じ `query_analyzer` に少しずつ具体的な質問を渡します。質問が「rag from scratch」から「2023年に公開」「2024年より前」「5分未満」へ具体化するにつれて、意味検索用の `content_search` / `title_search` に加えて、日付や動画時間の範囲フィルターが埋まっていく点を観察します。各セルは `pretty_print()` により、既定値と異なるフィールドだけを表示します。
+    """)
+    return
 
 
 @app.cell
